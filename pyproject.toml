@@ -40,10 +40,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sidol/sidol"
-Documentation = "https://github.com/sidol/sidol#readme"
-Repository = "https://github.com/sidol/sidol"
-Issues = "https://github.com/sidol/sidol/issues"
+Homepage = "https://github.com/mitayan0/sidol"
+Documentation = "https://github.com/mitayan0/sidol#readme"
+Repository = "https://github.com/mitayan0/sidol"
+Issues = "https://github.com/mitayan0/sidol/issues"
 
 [project.scripts]
 sidol = "sidol.cli:main"

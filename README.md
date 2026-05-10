@@ -1,5 +1,7 @@
 # Sidol
 
+[![GitHub](https://img.shields.io/badge/github-mitayan0%2Fsidol-blue?logo=github)](https://github.com/mitayan0/sidol)
+
 **SQL for everything.** Read, write, and delete across any API or database using plain SQL.
 
 - `SELECT` → executed through DuckDB (fast, in-memory, federated)
@@ -32,7 +34,7 @@ winget install --id=astral-sh.uv -e
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone & install all dependencies in ~2 seconds
-git clone https://github.com/yourname/sidol
+git clone https://github.com/mitayan0/sidol
 cd sidol
 uv sync
 
@@ -49,7 +51,8 @@ uv run mypy sidol/
 ## Setup (classic pip)
 
 ```bash
-python -m pip install -e ".[dev]"
+pip install -e .
+pip install pytest pytest-asyncio respx mypy ruff
 python -m pytest
 ```
 
@@ -110,4 +113,4 @@ class MyConnector(BaseConnector):
 
 ## License
 
-MIT
+MIT — see [LICENSE](https://github.com/mitayan0/sidol/blob/main/LICENSE)
