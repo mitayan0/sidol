@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 
 from sidol.cache import TTLCache
 from sidol.connectors.base import BaseConnector
-from sidol.errors import ConnectorError, CapabilityError
-from sidol.types import Column, Schema, Capabilities, WriteResult
-
+from sidol.errors import ConnectorError
+from sidol.types import Capabilities, Column, Schema, WriteResult
 
 # ServiceNow Table API -> sidol type mapping
 _SNOW_TYPE_MAP = {
@@ -23,14 +23,14 @@ _SNOW_TYPE_MAP = {
 }
 
 
-def _flatten_row(row: dict) -> dict:
+def _flatten_row(row: dict[str, Any]) -> dict[str, Any]:
     """Flatten ServiceNow's {'value': ..., 'display_value': ...} field structure."""
     return {k: (v["value"] if isinstance(v, dict) else v) for k, v in row.items()}
 
 
 class ServiceNowConnector(BaseConnector):
     """Full CRUD connector for ServiceNow Table API.
-    
+
     Usage:
         conn = ServiceNowConnector(
             instance="mycompany",
@@ -55,7 +55,7 @@ class ServiceNowConnector(BaseConnector):
         self.table = table
         self.page_size = page_size
         self._cache = TTLCache(default_ttl=300)  # 5 min schema cache
-        
+
         self._owns_client = client is None
         if client is not None:
             self.client = client
@@ -81,10 +81,10 @@ class ServiceNowConnector(BaseConnector):
 
     def schema(self) -> Schema:
         """Return schema from ServiceNow sys_dictionary table."""
-        cached = self._cache.get("schema")
+        cached: Schema | None = self._cache.get("schema")
         if cached:
             return cached
-        
+
         # Get metadata from sys_dictionary
         instance_url = self.base_url.split("/api/now/table/")[0]
         resp = self.client.get(
@@ -97,7 +97,7 @@ class ServiceNowConnector(BaseConnector):
         )
         data = self._result(resp)
         rows = data if isinstance(data, list) else []
-        
+
         cols = []
         for row in rows:
             if not row.get("element"):
@@ -111,7 +111,7 @@ class ServiceNowConnector(BaseConnector):
                 nullable=not row.get("mandatory"),
                 primary_key=(row["element"] == "sys_id"),
             ))
-        
+
         schema = Schema(tables={self.table: cols})
         self._cache.set("schema", schema)
         return schema
@@ -120,10 +120,10 @@ class ServiceNowConnector(BaseConnector):
         self,
         table: str,
         columns: list[str] | None,
-        filters: list[dict],
+        filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
-    ) -> Iterator[dict]:
+    ) -> Iterator[dict[str, Any]]:
         """Yield rows from ServiceNow Table API."""
         params: dict[str, Any] = {
             "sysparm_limit": min(limit or self.page_size, self.page_size),
@@ -146,7 +146,7 @@ class ServiceNowConnector(BaseConnector):
             if len(rows) < self.page_size:
                 break
 
-    def insert(self, table: str, rows: list[dict]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
         """Insert rows via ServiceNow POST."""
         results = []
         for row in rows:
@@ -155,7 +155,7 @@ class ServiceNowConnector(BaseConnector):
             results.append(_flatten_row(resp.json().get("result", {})))
         return WriteResult(affected_rows=len(results), returned=results)
 
-    def update(self, table: str, values: dict, filters: list[dict]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
         """Update rows via ServiceNow PATCH."""
         sys_ids = self._resolve_sys_ids(filters)
         results = []
@@ -165,14 +165,14 @@ class ServiceNowConnector(BaseConnector):
             results.append(_flatten_row(resp.json().get("result", {})))
         return WriteResult(affected_rows=len(results), returned=results)
 
-    def _get_page(self, params: dict) -> list[dict]:
+    def _get_page(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Fetch one page from the ServiceNow Table API."""
         data = self._result(self.client.get(self.base_url, params=params))
         if isinstance(data, list):
             return data
         return [data] if data else []
 
-    def delete(self, table: str, filters: list[dict]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
         """Delete rows via ServiceNow DELETE."""
         sys_ids = self._resolve_sys_ids(filters)
         for sys_id in sys_ids:
@@ -180,7 +180,7 @@ class ServiceNowConnector(BaseConnector):
             resp.raise_for_status()
         return WriteResult(affected_rows=len(sys_ids))
 
-    def _build_query(self, filters: list[dict]) -> str:
+    def _build_query(self, filters: list[dict[str, Any]]) -> str:
         """Convert sidol filter dicts to ServiceNow sysparm_query string."""
         parts = []
         for f in filters:
@@ -201,12 +201,12 @@ class ServiceNowConnector(BaseConnector):
                 parts.append(f"{col}IN{','.join(str(v) for v in val)}")
         return "^".join(parts)
 
-    def _resolve_sys_ids(self, filters: list[dict]) -> list[str]:
+    def _resolve_sys_ids(self, filters: list[dict[str, Any]]) -> list[str]:
         """Get sys_ids for UPDATE/DELETE. Fetch if not directly specified."""
         for f in filters:
             if f.get("col") == "sys_id" and f.get("op") == "=":
                 return [f["val"]]
-        
+
         # Need to fetch matching records first
         rows = list(self.fetch(self.table, ["sys_id"], filters, limit=None, offset=None))
         return [r["sys_id"] for r in rows if r.get("sys_id")]

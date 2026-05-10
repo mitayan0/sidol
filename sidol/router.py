@@ -6,7 +6,7 @@ to the appropriate connector. It uses sqlglot for parsing.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -16,19 +16,19 @@ from sidol.errors import ParseError, SidolError, UnsupportedSQLError
 
 def parse(sql: str) -> exp.Expression:
     """Parse SQL and return an AST expression.
-    
+
     Raises:
         ParseError: If SQL cannot be parsed
     """
     try:
-        return sqlglot.parse_one(sql)
+        return cast(exp.Expression, sqlglot.parse_one(sql))
     except sqlglot.errors.ParseError as e:
         raise ParseError(f"SQL parse error: {e}") from e
 
 
 def statement_type(tree: exp.Expression) -> str:
     """Return the statement type: SELECT, INSERT, UPDATE, DELETE, CREATE.
-    
+
     Raises:
         SidolError: If statement type is not supported
     """
@@ -65,7 +65,7 @@ def _reject_unsupported_dml(tree: exp.Expression) -> None:
         raise UnsupportedSQLError("Subqueries are not supported in Sidol v1 DML")
 
 
-def extract_insert_rows(tree: exp.Insert) -> list[dict]:
+def extract_insert_rows(tree: exp.Expression) -> list[dict[str, Any]]:
     """Extract column names and VALUES rows from an INSERT statement."""
     _reject_unsupported_dml(tree)
 
@@ -79,21 +79,21 @@ def extract_insert_rows(tree: exp.Insert) -> list[dict]:
     if not isinstance(values_node, exp.Values):
         raise UnsupportedSQLError("Only INSERT ... VALUES is supported in Sidol v1")
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for tuple_node in values_node.expressions:
         if not isinstance(tuple_node, exp.Tuple):
             raise UnsupportedSQLError("INSERT values must be literal tuples")
         vals = [_literal_value(v) for v in tuple_node.expressions]
         if len(vals) != len(cols):
             raise ParseError("INSERT column count does not match value count")
-        rows.append(dict(zip(cols, vals)))
+        rows.append(dict(zip(cols, vals, strict=False)))
 
     if not rows:
         raise ParseError("INSERT must include at least one VALUES row")
     return rows
 
 
-def extract_update_set(tree: exp.Update) -> dict:
+def extract_update_set(tree: exp.Expression) -> dict[str, Any]:
     """Extract SET col=val pairs from an UPDATE statement."""
     _reject_unsupported_dml(tree)
 
@@ -108,7 +108,7 @@ def extract_update_set(tree: exp.Update) -> dict:
     return result
 
 
-def extract_filters(tree: exp.Expression, require_where: bool = False) -> list[dict]:
+def extract_filters(tree: exp.Expression, require_where: bool = False) -> list[dict[str, Any]]:
     """Extract WHERE conditions as a list of filter dicts.
 
     Each filter dict has keys: col, op, val  (or 'raw' for complex expressions).
@@ -122,12 +122,12 @@ def extract_filters(tree: exp.Expression, require_where: bool = False) -> list[d
             )
         return []
 
-    filters: list[dict] = []
+    filters: list[dict[str, Any]] = []
     _walk_conditions(where.this, filters)
     return filters
 
 
-def _walk_conditions(node: exp.Expression, out: list[dict]) -> None:
+def _walk_conditions(node: Any, out: list[dict[str, Any]]) -> None:
     """Recursively walk AND-joined WHERE conditions."""
     if isinstance(node, exp.And):
         _walk_conditions(node.left, out)
@@ -150,15 +150,16 @@ def _walk_conditions(node: exp.Expression, out: list[dict]) -> None:
     }
     for cls, op in op_map.items():
         if isinstance(node, cls):
-            col = node.this.name if hasattr(node.this, "name") else str(node.this)
-            val = _literal_value(node.expression) if hasattr(node, "expression") else None
+            expr = cast(exp.Expression, node)
+            col = expr.this.name if hasattr(expr.this, "name") else str(expr.this)
+            val = _literal_value(expr.expression) if hasattr(expr, "expression") else None
             out.append({"col": col, "op": op, "val": val})
             return
 
     out.append({"raw": node.sql()})
 
 
-def _identifier_name(node: exp.Expression | str) -> str:
+def _identifier_name(node: Any) -> str:
     if isinstance(node, exp.Identifier):
         return str(node.this)
     if isinstance(node, exp.Expression) and hasattr(node, "name"):
@@ -166,7 +167,7 @@ def _identifier_name(node: exp.Expression | str) -> str:
     return str(node)
 
 
-def _column_name(node: exp.Expression) -> str:
+def _column_name(node: Any) -> str:
     if isinstance(node, exp.Column):
         if node.table:
             raise UnsupportedSQLError("Only unqualified column names are supported in Sidol v1 DML")
@@ -188,7 +189,7 @@ def _coerce_number(text: str) -> int | float | str:
         return text
 
 
-def _literal_value(node: exp.Expression) -> Any:
+def _literal_value(node: Any) -> Any:
     """Extract a Python scalar from a sqlglot literal node."""
     if isinstance(node, exp.Literal):
         if node.is_string:

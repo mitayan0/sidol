@@ -28,7 +28,7 @@ class ParseError(SidolError):
 
 class CapabilityError(ConnectorError):
     """Connector does not support the requested operation."""
-    
+
     def __init__(self, connector_name: str, operation: str):
         super().__init__(
             f"Connector '{connector_name}' does not support {operation}. "
@@ -38,7 +38,7 @@ class CapabilityError(ConnectorError):
 
 class TableNotFoundError(SidolError):
     """No connector registered for the requested table."""
-    
+
     def __init__(self, table: str, available: list[str]):
         super().__init__(
             f"No connector registered for table '{table}'.\n"

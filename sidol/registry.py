@@ -20,7 +20,7 @@ class RegisteredTable:
 
 
 class ConnectorRegistry:
-    def __init__(self):
+    def __init__(self) -> None:
         self._tables: dict[str, RegisteredTable] = {}
 
     def register_table(

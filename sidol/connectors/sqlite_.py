@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from sidol.connectors.base import BaseConnector
-from sidol.types import Column, Schema, Capabilities, WriteResult
-
+from sidol.types import Capabilities, Column, Schema, WriteResult
 
 # SQLite affinity -> sidol type mapping
 _SQLITE_TYPE_MAP = {
@@ -19,7 +19,7 @@ _SQLITE_TYPE_MAP = {
 }
 
 
-def _build_where(filters: list[dict]) -> tuple[str, list]:
+def _build_where(filters: list[dict[str, Any]]) -> tuple[str, list[Any]]:
     """Return a (WHERE clause string, params list) pair for the given filters."""
     parts = []
     params = []
@@ -34,10 +34,10 @@ def _build_where(filters: list[dict]) -> tuple[str, list]:
 
 class SQLiteConnector(BaseConnector):
     """Full CRUD connector for SQLite.
-    
+
     Reads can go through DuckDB's native SQLite extension for complex queries.
     This connector provides schema discovery and write operations.
-    
+
     Usage:
         conn = SQLiteConnector(path="./mydb.sqlite")
     """
@@ -74,10 +74,10 @@ class SQLiteConnector(BaseConnector):
         self,
         table: str,
         columns: list[str] | None,
-        filters: list[dict],
+        filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
-    ) -> Iterator[dict]:
+    ) -> Iterator[dict[str, Any]]:
         """Yield rows from SQLite."""
         col_str = ", ".join(columns) if columns else "*"
         where_clause, params = _build_where(filters)
@@ -96,34 +96,34 @@ class SQLiteConnector(BaseConnector):
         finally:
             conn.close()
 
-    def insert(self, table: str, rows: list[dict]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
         """Insert rows into SQLite."""
         if not rows:
             return WriteResult(affected_rows=0)
-        
+
         columns = list(rows[0].keys())
         placeholders = ", ".join(["?"] * len(columns))
         col_str = ", ".join(columns)
         q = f"INSERT INTO {table} ({col_str}) VALUES ({placeholders})"
-        
+
         conn = sqlite3.connect(self.path)
         try:
             cursor = conn.cursor()
             for row in rows:
                 cursor.execute(q, [row.get(c) for c in columns])
             conn.commit()
-            
+
             # Get last row IDs if possible
             returned = []
             for i, row in enumerate(rows):
                 row_id = cursor.lastrowid if i == len(rows) - 1 else None
                 returned.append({**row, "rowid": row_id} if row_id else row)
-            
+
             return WriteResult(affected_rows=len(rows), returned=returned)
         finally:
             conn.close()
 
-    def update(self, table: str, values: dict, filters: list[dict]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
         """Update rows matching filters."""
         if not values:
             return WriteResult(affected_rows=0)
@@ -139,7 +139,7 @@ class SQLiteConnector(BaseConnector):
         finally:
             conn.close()
 
-    def delete(self, table: str, filters: list[dict]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
         """Delete rows matching filters."""
         where_clause, params = _build_where(filters)
         q = f"DELETE FROM {table}{where_clause}"

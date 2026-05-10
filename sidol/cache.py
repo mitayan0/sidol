@@ -13,7 +13,7 @@ class CacheEntry:
 
 class TTLCache:
     """Simple in-memory TTL cache."""
-    
+
     def __init__(self, default_ttl: int = 300):  # 5 minutes default
         self._store: dict[str, CacheEntry] = {}
         self.default_ttl = default_ttl

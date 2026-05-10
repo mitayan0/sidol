@@ -17,7 +17,7 @@ class Column:
 @dataclass(frozen=True)
 class Schema:
     """Schema description: table_name -> list of columns."""
-    tables: dict[str, list["Column"]]
+    tables: dict[str, list[Column]]
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class Capabilities:
 class WriteResult:
     """Result of INSERT/UPDATE/DELETE operations."""
     affected_rows: int = 0
-    returned: list[dict] = field(default_factory=list)
+    returned: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -55,7 +55,7 @@ class Result:
     columns: list[str] = field(default_factory=list)
     rows: list[tuple[Any, ...]] = field(default_factory=list)
     affected_rows: int = 0
-    returned: list[dict] = field(default_factory=list)
+    returned: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
     @property

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import csv
 import pathlib
-from typing import Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import duckdb
 
 from sidol.connectors.base import BaseConnector
-from sidol.types import Column, Schema, Capabilities, WriteResult
-
+from sidol.types import Capabilities, Column, Schema, WriteResult
 
 # DuckDB type -> sidol type mapping
 _TYPE_MAP = {
@@ -27,10 +27,10 @@ _TYPE_MAP = {
 
 class CSVConnector(BaseConnector):
     """Read/write connector for CSV files.
-    
+
     Reads use DuckDB's native CSV scanner (fast, type-inferred).
     Writes append or overwrite the file using stdlib csv.
-    
+
     Usage:
         conn = CSVConnector(path="./data/risks.csv")
         conn = CSVConnector(path="./data/risks.csv", writable=True)
@@ -48,11 +48,11 @@ class CSVConnector(BaseConnector):
         """Return schema inferred from CSV file using DuckDB."""
         if self._schema_cache:
             return self._schema_cache
-        
+
         if not self.path.exists():
             # Return empty schema for new writable files
             return Schema(tables={self.table_name: []})
-        
+
         conn = duckdb.connect(":memory:")
         try:
             result = conn.execute(
@@ -75,10 +75,10 @@ class CSVConnector(BaseConnector):
         self,
         table: str,
         columns: list[str] | None,
-        filters: list[dict],
+        filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
-    ) -> Iterator[dict]:
+    ) -> Iterator[dict[str, Any]]:
         """Yield rows from CSV using DuckDB."""
         if not self.path.exists():
             return
@@ -88,14 +88,14 @@ class CSVConnector(BaseConnector):
             result = conn.execute(q)
             col_names = [d[0] for d in result.description] if result.description else []
             for row in result.fetchall():
-                yield dict(zip(col_names, row))
+                yield dict(zip(col_names, row, strict=False))
         finally:
             conn.close()
 
     def _build_fetch_query(
         self,
         columns: list[str] | None,
-        filters: list[dict],
+        filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
     ) -> str:
@@ -111,7 +111,7 @@ class CSVConnector(BaseConnector):
             q += f" OFFSET {offset}"
         return q
 
-    def _filter_to_sql(self, f: dict) -> str:
+    def _filter_to_sql(self, f: dict[str, Any]) -> str:
         """Convert a single filter dict to a SQL predicate string."""
         col, op, val = f["col"], f["op"], f["val"]
         if val is None:
@@ -120,62 +120,62 @@ class CSVConnector(BaseConnector):
             return f"{col} {op} '{val}'"
         return f"{col} {op} {val}"
 
-    def insert(self, table: str, rows: list[dict]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
         """Append rows to CSV file."""
         if not self._writable:
             raise PermissionError(
                 f"CSVConnector for '{self.path}' is read-only. "
                 "Pass writable=True to enable writes."
             )
-        
+
         if not rows:
             return WriteResult(affected_rows=0)
-        
+
         file_exists = self.path.exists() and self.path.stat().st_size > 0
         fieldnames = list(rows[0].keys())
-        
+
         with open(self.path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=self.delimiter)
             if not file_exists:
                 writer.writeheader()
             writer.writerows(rows)
-        
+
         # Invalidate schema cache since we may have added new columns
         self._schema_cache = None
-        
+
         return WriteResult(affected_rows=len(rows))
 
-    def update(self, table: str, values: dict, filters: list[dict]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
         """Update matching rows (full file rewrite)."""
         if not self._writable:
             raise PermissionError("CSVConnector is read-only.")
-        
+
         if not self.path.exists():
             return WriteResult(affected_rows=0)
-        
+
         all_rows = list(self.fetch(table, [], [], None, None))
         affected = 0
-        
+
         for row in all_rows:
             if self._matches(row, filters):
                 row.update(values)
                 affected += 1
-        
+
         self._rewrite(all_rows)
         return WriteResult(affected_rows=affected)
 
-    def delete(self, table: str, filters: list[dict]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
         """Delete matching rows (full file rewrite)."""
         if not self._writable:
             raise PermissionError("CSVConnector is read-only.")
-        
+
         if not self.path.exists():
             return WriteResult(affected_rows=0)
-        
+
         all_rows = list(self.fetch(table, [], [], None, None))
         surviving = [r for r in all_rows if not self._matches(r, filters)]
         deleted = len(all_rows) - len(surviving)
-        
+
         self._rewrite(surviving)
         return WriteResult(affected_rows=deleted)
 
@@ -187,14 +187,14 @@ class CSVConnector(BaseConnector):
             deletable=self._writable,
         )
 
-    def _matches(self, row: dict, filters: list[dict]) -> bool:
+    def _matches(self, row: dict[str, Any], filters: list[dict[str, Any]]) -> bool:
         """Check if row matches all filters."""
         for f in filters:
             if "raw" in f:
                 continue  # Can't evaluate raw SQL in Python
             col, op, val = f["col"], f["op"], f["val"]
             row_val = row.get(col)
-            
+
             if op == "=" and str(row_val) != str(val):
                 return False
             if op == "!=" and str(row_val) == str(val):
@@ -209,12 +209,12 @@ class CSVConnector(BaseConnector):
                 return False
         return True
 
-    def _rewrite(self, rows: list[dict]) -> None:
+    def _rewrite(self, rows: list[dict[str, Any]]) -> None:
         """Rewrite CSV file with new rows."""
         if not rows:
             self.path.write_text("")
             return
-        
+
         with open(self.path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()), delimiter=self.delimiter)
             writer.writeheader()

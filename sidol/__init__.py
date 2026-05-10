@@ -6,35 +6,34 @@ sidol (𝘴𝘪𝘥𝘰𝘭) — the fermented fish paste that connects everythi
 __version__ = "0.1.0"
 
 # Core API
-from sidol.core import Session, connect
-
 # Connector base
 from sidol.connectors.base import BaseConnector
-from sidol.types import (
-    Column,
-    Schema,
-    Capabilities,
-    WriteResult,
-    QueryResult,
-    Result,
-)
-
-# Errors
-from sidol.errors import (
-    SidolError,
-    ConnectorError,
-    WriteError,
-    SchemaError,
-    ParseError,
-    CapabilityError,
-    TableNotFoundError,
-    UnsupportedSQLError,
-)
+from sidol.connectors.csv_ import CSVConnector
 
 # Built-in connectors
 from sidol.connectors.servicenow import ServiceNowConnector
-from sidol.connectors.csv_ import CSVConnector
 from sidol.connectors.sqlite_ import SQLiteConnector
+from sidol.core import Session, connect
+
+# Errors
+from sidol.errors import (
+    CapabilityError,
+    ConnectorError,
+    ParseError,
+    SchemaError,
+    SidolError,
+    TableNotFoundError,
+    UnsupportedSQLError,
+    WriteError,
+)
+from sidol.types import (
+    Capabilities,
+    Column,
+    QueryResult,
+    Result,
+    Schema,
+    WriteResult,
+)
 
 __all__ = [
     # Version
