@@ -11,7 +11,6 @@ env/
 
 # uv
 .python-version
-uv.lock
 
 # Build / distribution
 dist/
