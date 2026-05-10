@@ -45,9 +45,6 @@ Documentation = "https://github.com/mitayan0/sidol#readme"
 Repository = "https://github.com/mitayan0/sidol"
 Issues = "https://github.com/mitayan0/sidol/issues"
 
-[project.scripts]
-sidol = "sidol.cli:main"
-
 # ========== UV CONFIGURATION ==========
 [tool.uv]
 # Pin specific versions for reproducibility
