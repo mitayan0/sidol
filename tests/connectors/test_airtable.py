@@ -1,7 +1,9 @@
 import unittest
+
 import httpx
+
 from sidol.connectors.airtable import AirtableConnector
-from sidol.errors import ConnectorError, WriteError
+
 
 class TestAirtableConnector(unittest.TestCase):
     def setUp(self):
@@ -27,10 +29,10 @@ class TestAirtableConnector(unittest.TestCase):
                     "createdTime": "2023-01-01T00:00:00.000Z"
                 }]
             })
-        
+
         conn = self._make_connector(handler)
         schema = conn.schema()
-        
+
         cols = {c.name: c for c in schema.tables[self.table]}
         self.assertIn("id", cols)
         self.assertEqual(cols["Name"].type, "text")
@@ -42,11 +44,11 @@ class TestAirtableConnector(unittest.TestCase):
         def handler(request):
             requests.append(request)
             return httpx.Response(200, json={"records": [{"id": "rec1", "fields": {"Name": "X"}}]})
-        
+
         conn = self._make_connector(handler)
         filters = [{"col": "Name", "op": "=", "val": "Test"}]
         list(conn.fetch(self.table, None, filters, limit=1, offset=0))
-        
+
         params = requests[0].url.params
         self.assertEqual(params["filterByFormula"], "{Name} = 'Test'")
 
@@ -61,7 +63,7 @@ class TestAirtableConnector(unittest.TestCase):
                     "offset": "next_page"
                 })
             return httpx.Response(200, json={"records": [{"id": "rec2"}]})
-        
+
         conn = self._make_connector(handler)
         rows = list(conn.fetch(self.table, None, [], limit=None, offset=0))
         self.assertEqual(len(rows), 2)
@@ -78,12 +80,12 @@ class TestAirtableConnector(unittest.TestCase):
             # Echo back records with IDs
             recs = [{"id": f"rec{i}", "fields": r["fields"]} for i, r in enumerate(payload["records"])]
             return httpx.Response(200, json={"records": recs})
-        
+
         conn = self._make_connector(handler)
         # Insert 15 rows (should be 2 requests: 10 + 5)
         rows = [{"Name": f"T{i}"} for i in range(15)]
         res = conn.insert(self.table, rows)
-        
+
         self.assertEqual(res.affected_rows, 15)
         self.assertEqual(len(requests), 2)
         self.assertEqual(len(res.returned), 15)
@@ -95,10 +97,10 @@ class TestAirtableConnector(unittest.TestCase):
             if request.method == "GET":
                 return httpx.Response(200, json={"records": [{"id": "rec1"}, {"id": "rec2"}]})
             return httpx.Response(200, json={"deleted": True})
-        
+
         conn = self._make_connector(handler)
         res = conn.delete(self.table, [{"col": "Name", "op": "=", "val": "X"}])
-        
+
         self.assertEqual(res.affected_rows, 2)
         # Should have 1 GET to find IDs, and 1 DELETE to remove them
         methods = [r.method for r in calls]

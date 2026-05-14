@@ -1,22 +1,23 @@
-import unittest
-import tempfile
-import pathlib
 import csv
+import pathlib
+import tempfile
+import unittest
+
 import sidol
 from sidol.connectors.csv_ import CSVConnector
+
 
 class TestCSVCRUD(unittest.TestCase):
     def setUp(self):
         # Create a temp CSV file
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        self.tmp.close()
-        self.path = self.tmp.name
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+            self.path = tmp.name
         with open(self.path, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['id', 'name', 'role'])
             for i in range(1, 21):
                 writer.writerow([i, f"user{i}", f"role{i}"])
-        
+
         # Register connector
         self.db = sidol.connect()
         self.db.register("users", CSVConnector(self.path, writable=True))

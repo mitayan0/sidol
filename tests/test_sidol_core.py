@@ -11,13 +11,13 @@ import sidol
 from sidol import (
     BaseConnector,
     Capabilities,
+    CapabilityError,
     Column,
     Schema,
     TableNotFoundError,
     UnsupportedSQLError,
     WriteError,
     WriteResult,
-    CapabilityError,
 )
 from sidol.connectors.csv_ import CSVConnector
 from sidol.connectors.servicenow import ServiceNowConnector
@@ -28,7 +28,6 @@ from sidol.router import (
     extract_update_set,
     parse,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared fake connector
@@ -49,8 +48,7 @@ class FakeConnector(BaseConnector):
         return Schema(tables={"items": cols})
 
     def fetch(self, table, columns, filters, limit, offset):
-        for row in self._rows:
-            yield row
+        yield from self._rows
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
@@ -230,9 +228,9 @@ class SQLiteConnectorTests(unittest.TestCase):
     def setUp(self):
         self._db_path = ":memory:"
         # Pre-create a real on-disk temp file for tests that need persistence
-        self._tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self._tmpfile.close()
-        self._disk_path = self._tmpfile.name
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            self._tmpfile = tmp
+            self._disk_path = tmp.name
         # Seed the table
         con = sqlite3.connect(self._disk_path)
         con.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")

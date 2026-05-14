@@ -1,24 +1,24 @@
-import unittest
-import tempfile
-import sqlite3
 import pathlib
+import sqlite3
+import tempfile
+import unittest
+
 import sidol
 from sidol.connectors.sqlite_ import SQLiteConnector
+
 
 class TestSQLiteCRUD(unittest.TestCase):
     def setUp(self):
         # Create a temp SQLite file
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmp.close()
-        self.path = self.tmp.name
-        
-        # Seed the database
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            self.path = tmp.name
+        self.db = sidol.connect()
         con = sqlite3.connect(self.path)
         con.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
         con.execute("INSERT INTO users VALUES (1, 'alice')")
         con.commit()
         con.close()
-        
+
         # Register connector
         self.db = sidol.connect()
         self.db.register("users", SQLiteConnector(self.path))
