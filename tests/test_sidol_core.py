@@ -11,22 +11,22 @@ import sidol
 from sidol import (
     BaseConnector,
     Capabilities,
-    Schema,
     Column,
-    WriteResult,
+    Schema,
     TableNotFoundError,
     UnsupportedSQLError,
+    WriteError,
+    WriteResult,
 )
 from sidol.connectors.csv_ import CSVConnector
 from sidol.connectors.servicenow import ServiceNowConnector
 from sidol.connectors.sqlite_ import SQLiteConnector
 from sidol.router import (
-    parse,
+    extract_filters,
     extract_insert_rows,
     extract_update_set,
-    extract_filters,
+    parse,
 )
-import sqlglot.expressions as exp
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +337,226 @@ class ServiceNowConnectorTests(unittest.TestCase):
         self.assertTrue(caps.updatable)
         self.assertTrue(caps.deletable)
         self.assertTrue(caps.filter_pushdown)
+
+    def test_schema_uses_ui_meta_endpoint(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"result": {"columns": {
+                "sys_id": {"type": "GUID", "mandatory": False, "read_only": True},
+                "number": {"type": "string", "mandatory": False, "read_only": True},
+                "priority": {"type": "integer", "mandatory": False, "read_only": False},
+            }}})
+
+        conn = self._make_connector(handler)
+        schema = conn.schema()
+
+        self.assertIn("/api/now/ui/meta/incident", requests[0].url.path)
+        cols = {c.name: c for c in schema.tables["incident"]}
+        self.assertIn("sys_id", cols)
+        self.assertTrue(cols["sys_id"].primary_key)
+        self.assertIn("number", cols)
+        self.assertEqual(cols["priority"].type, "int")
+
+    def test_fetch_respects_limit_with_pagination(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            limit = int(request.url.params["sysparm_limit"])
+            return httpx.Response(
+                200,
+                json={"result": [{"sys_id": f"r{len(requests)}-{i}"} for i in range(limit)]},
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        conn = ServiceNowConnector(
+            instance="example",
+            table="incident",
+            client=client,
+            page_size=2,
+        )
+        rows = list(conn.fetch("incident", None, [], limit=5, offset=0))
+        self.assertEqual(len(rows), 5)
+        limits = [int(request.url.params["sysparm_limit"]) for request in requests]
+        self.assertEqual(limits, [2, 2, 1])
+        offsets = [int(request.url.params["sysparm_offset"]) for request in requests]
+        self.assertEqual(offsets, [0, 2, 4])
+
+    def test_sysparm_query_escapes_caret(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"result": []})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        conn = ServiceNowConnector(instance="example", table="incident", client=client)
+        filters = [{"col": "short_description", "op": "=", "val": "a^b"}]
+        list(conn.fetch("incident", None, filters, limit=1, offset=0))
+        q = requests[0].url.params.get("sysparm_query")
+        self.assertIsNotNone(q)
+        self.assertIn("short_description=a^^b", q)
+
+    def test_sysparm_fields_accepts_dot_walk(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"result": []})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        conn = ServiceNowConnector(instance="example", table="incident", client=client)
+        list(conn.fetch("incident", ["number", "caller_id.name"], [], limit=1, offset=0))
+        fields = requests[0].url.params.get("sysparm_fields")
+        self.assertEqual(fields, "number,caller_id.name")
+
+    def test_sysparm_display_value_all(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"result": []})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        conn = ServiceNowConnector(
+            instance="example",
+            table="incident",
+            client=client,
+            sysparm_display_value=True,
+        )
+        list(conn.fetch("incident", None, [], limit=1, offset=0))
+        dv = requests[0].url.params.get("sysparm_display_value")
+        self.assertEqual(dv, "all")
+
+    def test_oauth_refresh_on_401(self):
+        calls = []
+
+        def handler(request):
+            calls.append((request.method, str(request.url)))
+            if "oauth_token.do" in str(request.url):
+                return httpx.Response(200, json={"access_token": "good", "refresh_token": "r2"})
+            if request.headers.get("Authorization") != "Bearer good":
+                return httpx.Response(401, json={"error": {"message": "Invalid token"}})
+            return httpx.Response(200, json={"result": [{"sys_id": "1"}]})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        conn = ServiceNowConnector(
+            instance="example",
+            table="incident",
+            oauth_client_id="cid",
+            oauth_client_secret="sec",
+            oauth_refresh_token="r1",
+            oauth_access_token="bad",
+            client=client,
+        )
+        rows = list(conn.fetch("incident", None, [], limit=1, offset=0))
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(any("oauth_token.do" in u for _, u in calls))
+
+    def test_insert_write_error_includes_servicenow_message(self):
+        def handler(request):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "Required field missing", "detail": "short_description"}},
+            )
+
+        conn = self._make_connector(handler)
+        with self.assertRaises(WriteError) as ctx:
+            conn.insert("incident", [{"priority": "1"}])
+        self.assertIn("Required field missing", str(ctx.exception))
+        self.assertIn("short_description", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# Session.use() — default connector (zero network, zero disk)
+# ---------------------------------------------------------------------------
+
+class DefaultConnectorTests(unittest.TestCase):
+
+    def test_use_enables_any_table_for_select(self):
+        rows = [{"id": 1, "name": "alpha"}]
+        db = sidol.connect()
+        db.use(FakeConnector(rows))
+        tbl = db.sql("SELECT * FROM anything")
+        self.assertEqual(tbl.num_rows, 1)
+
+    def test_use_dml_routes_to_default_connector(self):
+        connector = FakeConnector([], writable=True)
+        db = sidol.connect()
+        db.use(connector)
+        result = db.sql("INSERT INTO whatever (name) VALUES ('test')")
+        self.assertEqual(result["affected_rows"], 1)
+
+    def test_register_takes_priority_over_use(self):
+        default_conn = FakeConnector([{"id": 99}])
+        specific_conn = FakeConnector([{"id": 1}])
+        db = sidol.connect()
+        db.use(default_conn)
+        db.register("specific", specific_conn)
+        tbl = db.sql("SELECT * FROM specific")
+        self.assertEqual(tbl.column("id").to_pylist(), [1])
+
+    def test_use_returns_session_for_chaining(self):
+        db = sidol.connect()
+        result = db.use(FakeConnector([]))
+        self.assertIs(result, db)
+
+
+# ---------------------------------------------------------------------------
+# ServiceNow multi-table tests  (mocked HTTP)
+# ---------------------------------------------------------------------------
+
+class ServiceNowMultiTableTests(unittest.TestCase):
+
+    def _make_multi_connector(self, handler):
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        return ServiceNowConnector(instance="example", client=client)
+
+    def test_fetch_uses_table_arg_in_url(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"result": [{"sys_id": "x"}]})
+
+        conn = self._make_multi_connector(handler)
+        list(conn.fetch("problem", None, [], limit=1, offset=0))
+        self.assertIn("/api/now/table/problem", requests[0].url.path)
+
+    def test_insert_uses_table_arg_in_url(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"result": {"sys_id": "abc"}})
+
+        conn = self._make_multi_connector(handler)
+        conn.insert("change_request", [{"short_description": "test"}])
+        self.assertIn("/api/now/table/change_request", requests[0].url.path)
+
+    def test_session_use_routes_two_tables(self):
+        def handler(request):
+            if "incident" in request.url.path:
+                return httpx.Response(200, json={"result": [{"id": "inc1"}]})
+            if "problem" in request.url.path:
+                return httpx.Response(200, json={"result": [{"id": "prb1"}]})
+            return httpx.Response(200, json={"result": []})
+
+        conn = self._make_multi_connector(handler)
+        db = sidol.connect()
+        db.use(conn)
+
+        inc = db.sql("SELECT * FROM incident")
+        prb = db.sql("SELECT * FROM problem")
+        self.assertEqual(inc.column("id").to_pylist(), ["inc1"])
+        self.assertEqual(prb.column("id").to_pylist(), ["prb1"])
+
+    def test_schema_returns_empty_in_multi_table_mode(self):
+        conn = self._make_multi_connector(lambda r: httpx.Response(200, json={"result": []}))
+        schema = conn.schema()
+        self.assertEqual(schema.tables, {})
 
 
 if __name__ == "__main__":

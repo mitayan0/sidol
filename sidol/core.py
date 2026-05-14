@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import pyarrow as pa
@@ -47,6 +47,7 @@ class Session:
     def __init__(self) -> None:
         self._registry = ConnectorRegistry()
         self._duckdb = duckdb.connect(":memory:")
+        self._default_connector: BaseConnector | None = None
 
     def register(self, name: str, connector: BaseConnector) -> Session:
         """Register a connector under a table name.
@@ -57,6 +58,11 @@ class Session:
         """
         name = name.lower()
         self._registry.register_table(name, connector)
+        return self
+
+    def use(self, connector: BaseConnector) -> Session:
+        """Set a default connector used for any table not explicitly registered."""
+        self._default_connector = connector
         return self
 
     def unregister(self, name: str) -> Session:
@@ -133,10 +139,16 @@ class Session:
         for table_name in tables:
             try:
                 entry = self._registry.resolve(table_name)
+                connector = entry.connector
+                native_table = entry.native_table
             except UnknownTableError:
-                continue  # CTE or subquery alias — skip
+                if self._default_connector is not None:
+                    connector = self._default_connector
+                    native_table = table_name
+                else:
+                    continue
 
-            fetched = list(entry.connector.fetch(entry.native_table, None, [], None, None))
+            fetched = list(connector.fetch(native_table, None, [], None, None))
             if fetched:
                 arrow_table = pa.Table.from_pylist(fetched)
                 self._duckdb.register(table_name, arrow_table)
@@ -151,18 +163,24 @@ class Session:
         try:
             entry = self._registry.resolve(table)
             return entry.connector
-        except Exception as e:
+        except Exception as exc:
+            if self._default_connector is not None:
+                return self._default_connector
             available = list(self._registry._tables.keys())
-            raise TableNotFoundError(table, available) from e
+            raise TableNotFoundError(table, available) from exc
 
     def tables(self) -> list[str]:
-        """Return list of registered table names."""
+        """Return list of registered table names, or all tables from default connector."""
+        if self._default_connector is not None and hasattr(self._default_connector, "list_tables"):
+            return cast(list[str], self._default_connector.list_tables())
         return list(self._registry._tables.keys())
 
     def close(self) -> None:
         """Close all connectors and cleanup."""
         for entry in self._registry.registered_tables():
             entry.connector.close()
+        if self._default_connector is not None:
+            self._default_connector.close()
         self._duckdb.close()
 
     def __enter__(self) -> Session:

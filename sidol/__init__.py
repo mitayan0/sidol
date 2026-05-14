@@ -35,11 +35,31 @@ from sidol.types import (
     WriteResult,
 )
 
+
+def connect_servicenow(
+    instance: str,
+    username: str | None = None,
+    password: str | None = None,
+    token: str | None = None,
+) -> Session:
+    """Connect to a ServiceNow instance. Query any table without registering."""
+    conn = ServiceNowConnector(
+        instance=instance,
+        username=username,
+        password=password,
+        token=token,
+    )
+    session = Session()
+    session.use(conn)
+    return session
+
+
 __all__ = [
     # Version
     "__version__",
     # Core API
     "connect",
+    "connect_servicenow",
     "Session",
     # Base
     "BaseConnector",

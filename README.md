@@ -9,6 +9,8 @@
 - Built-in connectors: **ServiceNow**, **CSV**, **SQLite**
 - Extensible: implement `BaseConnector` to add any source
 
+See [ROADMAP.md](ROADMAP.md) for phased delivery (Phase 0: ServiceNow hardening, then SDK work).
+
 ```python
 import sidol
 
