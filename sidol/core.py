@@ -25,7 +25,7 @@ from sidol.router import (
     parse,
     statement_type,
 )
-from sidol.types import Result, WriteResult
+from sidol.types import QueryResult, WriteResult
 
 
 class Session:
@@ -92,15 +92,12 @@ class Session:
         if isinstance(result, WriteResult):
             return {"affected_rows": result.affected_rows, "returned": result.returned}
 
-        # Handle read results — return Arrow Table
-        if isinstance(result, Result):
-            return pa.Table.from_pydict(
-                {col: [row[i] for row in result.rows] for i, col in enumerate(result.columns)}
-            ) if result.rows else pa.table({col: [] for col in result.columns})
+        # Handle read results (QueryResult) — return Arrow Table
+        return pa.Table.from_pydict(
+            {col: [row[i] for row in result.rows] for i, col in enumerate(result.columns)}
+        ) if result.rows else pa.table({col: [] for col in result.columns})
 
-        return result
-
-    def execute(self, query: str) -> Result | WriteResult:
+    def execute(self, query: str) -> QueryResult | WriteResult:
         """Execute any SQL and return a Result or WriteResult object."""
         tree = parse(query)
         stype = statement_type(tree)
@@ -131,32 +128,37 @@ class Session:
         if not supported:
             raise CapabilityError(connector.__class__.__name__, operation)
 
-    def _execute_select(self, query: str) -> Result:
-        """Execute SELECT via DuckDB with registered connectors as Arrow sources."""
-        tree = sqlglot.parse_one(query)
-        tables = [t.name for t in tree.find_all(exp.Table)]
-
-        for table_name in tables:
-            try:
-                entry = self._registry.resolve(table_name)
-                connector = entry.connector
-                native_table = entry.native_table
-            except UnknownTableError:
-                if self._default_connector is not None:
-                    connector = self._default_connector
-                    native_table = table_name
-                else:
-                    continue
-
-            fetched = list(connector.fetch(native_table, None, [], None, None))
-            if fetched:
-                arrow_table = pa.Table.from_pylist(fetched)
-                self._duckdb.register(table_name, arrow_table)
-
+    def _execute_select(self, query: str) -> QueryResult:
+        """Execute SELECT via DuckDB after registering necessary tables."""
+        self._register_query_tables(query)
         arrow_result = self._duckdb.execute(query).to_arrow_table()
         cols = list(arrow_result.column_names)
         result_rows = [tuple(r.values()) for r in arrow_result.to_pylist()]
-        return Result(columns=cols, rows=result_rows)
+        return QueryResult(columns=cols, rows=result_rows)
+
+    def _register_query_tables(self, query: str) -> None:
+        """Find and register all tables in a query with DuckDB."""
+        tree = sqlglot.parse_one(query)
+        tables = [t.name for t in tree.find_all(exp.Table)]
+        for name in tables:
+            self._register_table_with_duckdb(name)
+
+    def _register_table_with_duckdb(self, table_name: str) -> None:
+        """Fetch data from connector and register as a view in DuckDB."""
+        try:
+            entry = self._registry.resolve(table_name)
+            connector = entry.connector
+            native_table = entry.native_table
+        except UnknownTableError:
+            if self._default_connector is None:
+                return
+            connector = self._default_connector
+            native_table = table_name
+
+        fetched = list(connector.fetch(native_table, None, [], None, None))
+        if fetched:
+            arrow_table = pa.Table.from_pylist(fetched)
+            self._duckdb.register(table_name, arrow_table)
 
     def _get_connector(self, table: str) -> BaseConnector:
         """Get connector for a table, raising helpful error if not found."""

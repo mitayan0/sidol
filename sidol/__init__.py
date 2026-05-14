@@ -13,6 +13,7 @@ from sidol.connectors.csv_ import CSVConnector
 # Built-in connectors
 from sidol.connectors.servicenow import ServiceNowConnector
 from sidol.connectors.sqlite_ import SQLiteConnector
+from sidol.connectors.airtable import AirtableConnector
 from sidol.core import Session, connect
 
 # Errors
@@ -30,7 +31,6 @@ from sidol.types import (
     Capabilities,
     Column,
     QueryResult,
-    Result,
     Schema,
     WriteResult,
 )
@@ -69,7 +69,6 @@ __all__ = [
     "Capabilities",
     "WriteResult",
     "QueryResult",
-    "Result",
     # Errors
     "SidolError",
     "ConnectorError",
@@ -83,4 +82,5 @@ __all__ = [
     "ServiceNowConnector",
     "CSVConnector",
     "SQLiteConnector",
+    "AirtableConnector",
 ]

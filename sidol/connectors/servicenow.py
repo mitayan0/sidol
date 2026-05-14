@@ -1,17 +1,42 @@
-"""ServiceNow REST connector for Sidol."""
-
-from __future__ import annotations
-
-import json
+import time
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
-from sidol.cache import TTLCache
+from sidol.connectors import servicenow_utils as sn_utils
 from sidol.connectors.base import BaseConnector
 from sidol.errors import ConnectorError, WriteError
 from sidol.types import Capabilities, Column, Schema, WriteResult
+
+
+@dataclass
+class CacheEntry:
+    value: Any
+    expires_at: float
+
+
+class TTLCache:
+    """Simple in-memory TTL cache for ServiceNow schema/metadata."""
+
+    def __init__(self, default_ttl: int = 300):
+        self._store: dict[str, CacheEntry] = {}
+        self.default_ttl = default_ttl
+
+    def get(self, key: str) -> Any | None:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        if time.time() > entry.expires_at:
+            del self._store[key]
+            return None
+        return entry.value
+
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        duration = ttl if ttl is not None else self.default_ttl
+        self._store[key] = CacheEntry(value=value, expires_at=time.time() + duration)
+
 
 # ServiceNow Table API -> sidol type mapping
 _SNOW_TYPE_MAP = {
@@ -26,85 +51,6 @@ _SNOW_TYPE_MAP = {
     "guid": "text",
     "GUID": "text",
 }
-
-
-def _flatten_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Flatten ServiceNow's {'value': ..., 'display_value': ...} field structure."""
-    return {k: (v["value"] if isinstance(v, dict) else v) for k, v in row.items()}
-
-
-def _escape_sysparm_value(val: str) -> str:
-    """Escape ^ for Glide encoded query strings (^ is the AND delimiter)."""
-    return val.replace("^", "^^")
-
-
-def _sysparm_literal(val: Any) -> str:
-    """Format a scalar for use in a sysparm_query atom (after column and operator)."""
-    if val is None:
-        return ""
-    if isinstance(val, bool):
-        return "true" if val else "false"
-    if isinstance(val, (int, float)):
-        return str(val)
-    return _escape_sysparm_value(str(val))
-
-
-def _sn_error_detail(response: httpx.Response) -> str:
-    """Build a human-readable error line from a ServiceNow HTTP response."""
-    parts: list[str] = [f"HTTP {response.status_code}"]
-    cid = response.headers.get("x-snc-correlation-id") or response.headers.get("X-Correlation-ID")
-    if cid:
-        parts.append(f"correlation_id={cid}")
-    if not response.content:
-        return " ".join(parts)
-    try:
-        payload = response.json()
-    except json.JSONDecodeError:
-        preview = response.text[:400].replace("\n", " ")
-        parts.append(f"body={preview!r}")
-        return " ".join(parts)
-    err = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(err, dict):
-        msg = err.get("message")
-        detail = err.get("detail")
-        if msg:
-            parts.append(f"message={msg!r}")
-        if detail:
-            parts.append(f"detail={detail!r}")
-    else:
-        preview = response.text[:400].replace("\n", " ")
-        parts.append(f"body={preview!r}")
-    return " ".join(parts)
-
-
-def _filter_atom(col: str, op: str, val: Any) -> str | None:
-    """One sysparm_query atom, or None to skip (unsupported)."""
-    if op == "=" and val is None:
-        return f"{col}ISEMPTY"
-    if op == "!=" and val is None:
-        return f"{col}ISNOTEMPTY"
-    if op == "IN":
-        if not isinstance(val, list):
-            return None
-        if not val:
-            return None
-        inner = ",".join(_sysparm_literal(v) for v in val)
-        return f"{col}IN{inner}"
-    if op == "LIKE":
-        return f"{col}LIKE{_sysparm_literal(val)}"
-    if op == "=":
-        return f"{col}={_sysparm_literal(val)}"
-    if op == "!=":
-        return f"{col}!={_sysparm_literal(val)}"
-    if op == ">":
-        return f"{col}>{_sysparm_literal(val)}"
-    if op == ">=":
-        return f"{col}>={_sysparm_literal(val)}"
-    if op == "<":
-        return f"{col}<{_sysparm_literal(val)}"
-    if op == "<=":
-        return f"{col}<={_sysparm_literal(val)}"
-    return None
 
 
 class ServiceNowConnector(BaseConnector):
@@ -143,33 +89,34 @@ class ServiceNowConnector(BaseConnector):
         self.table = table
         self.page_size = max(1, min(page_size, 10_000))
         self._timeout = timeout
-        self._cache = TTLCache(default_ttl=300)  # 5 min schema cache
+        self._cache = TTLCache(default_ttl=300)
         self._sysparm_display_value = sysparm_display_value
 
-        self._oauth_client_id = oauth_client_id
-        self._oauth_client_secret = oauth_client_secret
-        self._oauth_refresh_token = oauth_refresh_token
-        self._oauth_access_token = oauth_access_token
+        self._init_oauth(oauth_client_id, oauth_client_secret, oauth_refresh_token, oauth_access_token)
+        self._init_client(client, username, password, token, timeout)
 
+    def _init_oauth(self, cid: str | None, secret: str | None, refresh: str | None, access: str | None) -> None:
+        """Setup OAuth credentials."""
+        self._oauth_client_id = cid
+        self._oauth_client_secret = secret
+        self._oauth_refresh_token = refresh
+        self._oauth_access_token = access
+
+    def _init_client(
+        self, client: httpx.Client | None, user: str | None, pwd: str | None, token: str | None, timeout: float
+    ) -> None:
+        """Setup HTTP client with appropriate auth."""
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        oauth_ready = self._oauth_use_refresh_flow()
-        use_basic = bool(
-            username
-            and password
-            and not token
-            and not oauth_ready
-        )
-
         self._owns_client = client is None
+
         if client is not None:
             self.client = client
-        else:
-            if use_basic and username is not None and password is not None:
-                self.client = httpx.Client(headers=headers, auth=(username, password), timeout=timeout)
-            else:
-                self.client = httpx.Client(headers=headers, auth=None, timeout=timeout)
+            return
 
-        if oauth_ready:
+        auth = (user, pwd) if (user and pwd and not token and not self._oauth_use_refresh_flow()) else None
+        self.client = httpx.Client(headers=headers, auth=auth, timeout=timeout)
+
+        if self._oauth_use_refresh_flow():
             self._ensure_initial_oauth_access_token()
             self.client.headers["Authorization"] = f"Bearer {self._oauth_access_token}"
         elif token:
@@ -217,7 +164,7 @@ class ServiceNowConnector(BaseConnector):
         )
         if response.status_code >= 400:
             raise ConnectorError(
-                f"ServiceNow OAuth token refresh failed: {_sn_error_detail(response)}"
+                f"ServiceNow OAuth token refresh failed: {sn_utils.sn_error_detail(response)}"
             ) from None
         try:
             payload = response.json()
@@ -244,7 +191,7 @@ class ServiceNowConnector(BaseConnector):
     def _require_ok(self, response: httpx.Response, operation: str, *, is_write: bool) -> None:
         if response.status_code < 400:
             return
-        detail = _sn_error_detail(response)
+        detail = sn_utils.sn_error_detail(response)
         msg = f"ServiceNow {operation} failed: {detail}"
         if is_write:
             raise WriteError(msg) from None
@@ -359,51 +306,47 @@ class ServiceNowConnector(BaseConnector):
         limit: int | None,
         offset: int | None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield rows from ServiceNow Table API.
-
-        ``columns`` may include dot-walked fields (e.g. ``caller_id.name``) for Table API
-        ``sysparm_fields``. When ``sysparm_display_value`` was True on the connector,
-        ``sysparm_display_value=all`` is sent so reference display values are populated.
-        """
+        """Yield rows from ServiceNow Table API."""
         yielded = 0
-        next_offset = offset or 0
-        cap = limit
+        current_offset = offset or 0
 
-        while True:
-            if cap is not None and yielded >= cap:
-                return
-
-            chunk = self.page_size
-            if cap is not None:
-                remaining = cap - yielded
-                if remaining <= 0:
-                    return
-                chunk = min(self.page_size, remaining)
-
-            params: dict[str, Any] = {
-                "sysparm_limit": chunk,
-                "sysparm_offset": next_offset,
-            }
-            if columns:
-                params["sysparm_fields"] = ",".join(columns)
-            if filters:
-                params["sysparm_query"] = self._build_query(filters)
-            if self._sysparm_display_value:
-                params["sysparm_display_value"] = "all"
-
+        while limit is None or yielded < limit:
+            params = self._build_fetch_params(columns, filters, limit, yielded, current_offset)
             rows = self._get_page(params, table)
             if not rows:
-                return
+                break
 
             for row in rows:
-                if cap is not None and yielded >= cap:
+                if limit is not None and yielded >= limit:
                     return
-                yield _flatten_row(row)
+                yield sn_utils.flatten_row(row)
                 yielded += 1
 
-            if len(rows) < chunk:
-                return
-            next_offset += len(rows)
+            if len(rows) < params["sysparm_limit"]:
+                break
+            current_offset += len(rows)
+
+    def _build_fetch_params(
+        self,
+        columns: list[str] | None,
+        filters: list[dict[str, Any]],
+        limit: int | None,
+        yielded: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        """Build sysparm_* query parameters for a single page fetch."""
+        chunk = self.page_size
+        if limit is not None:
+            chunk = min(self.page_size, limit - yielded)
+
+        params: dict[str, Any] = {"sysparm_limit": chunk, "sysparm_offset": offset}
+        if columns:
+            params["sysparm_fields"] = ",".join(columns)
+        if filters:
+            params["sysparm_query"] = self._build_query(filters)
+        if self._sysparm_display_value:
+            params["sysparm_display_value"] = "all"
+        return params
 
     def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
         """Insert rows via ServiceNow POST."""
@@ -411,7 +354,7 @@ class ServiceNowConnector(BaseConnector):
         for row in rows:
             resp = self._request("POST", self._table_url(table), json=row)
             payload = self._json_payload(resp, f"INSERT {table}", is_write=True)
-            results.append(_flatten_row(payload.get("result", {})))
+            results.append(sn_utils.flatten_row(payload.get("result", {})))
         return WriteResult(affected_rows=len(results), returned=results)
 
     def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
@@ -421,7 +364,7 @@ class ServiceNowConnector(BaseConnector):
         for sys_id in sys_ids:
             resp = self._request("PATCH", f"{self._table_url(table)}/{sys_id}", json=values)
             payload = self._json_payload(resp, f"UPDATE {table}", is_write=True)
-            results.append(_flatten_row(payload.get("result", {})))
+            results.append(sn_utils.flatten_row(payload.get("result", {})))
         return WriteResult(affected_rows=len(results), returned=results)
 
     def _get_page(self, params: dict[str, Any], table: str) -> list[dict[str, Any]]:
@@ -447,7 +390,7 @@ class ServiceNowConnector(BaseConnector):
             if "raw" in f:
                 continue
             col, op, val = f["col"], f["op"], f["val"]
-            atom = _filter_atom(col, op, val)
+            atom = sn_utils.filter_atom(col, op, val)
             if atom:
                 parts.append(atom)
         return "^".join(parts)

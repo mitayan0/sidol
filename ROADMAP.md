@@ -4,7 +4,7 @@ Phased delivery: harden one connector, extract only after repetition, add a stru
 
 ---
 
-## Phase 0 — ServiceNow hardening (current focus)
+## Phase 0 — ServiceNow hardening (complete)
 
 **Goal:** One connector is **production-quality** before generalizing anything.
 
@@ -35,17 +35,22 @@ Use this list to track implementation work in-repo.
 
 ---
 
-## Phase 1 — Extract what repeated itself
+## Phase 1 — Extract what repeated itself (complete)
 
-**After** ServiceNow is stable: pull repeated logic into **small pure functions** inside [`sidol/connectors/servicenow.py`](sidol/connectors/servicenow.py) (or SN-scoped helpers). **Move to `sidol.utils` only when a second connector needs the same code.**
+- [x] Pull repeated logic into **small pure functions** inside [`sidol/connectors/servicenow_utils.py`](sidol/connectors/servicenow_utils.py).
+- [x] Refactor `ServiceNowConnector` to be thin and focused.
+
+---
+
+## Phase 2 — Second connector (different API style) (complete)
+
+- [x] Add **Airtable** connector to validate shared patterns.
+- [x] Implement `filterByFormula` mapping.
+- [x] Handle chunked writes (10 records at a time).
 
 ---
 
-## Phase 2 — Second connector (different API style)
-
-Add **one** connector unlike ServiceNow (e.g. **Notion** or **Airtable**) to validate or redesign shared helpers **before** they become a public contract.
-
----
+## Phase 3 — SDK Surface & Federation (current focus)
 
 ## Phase 3 — SDK surface
 

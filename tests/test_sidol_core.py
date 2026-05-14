@@ -17,6 +17,7 @@ from sidol import (
     UnsupportedSQLError,
     WriteError,
     WriteResult,
+    CapabilityError,
 )
 from sidol.connectors.csv_ import CSVConnector
 from sidol.connectors.servicenow import ServiceNowConnector
@@ -177,7 +178,6 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(result["affected_rows"], 1)
 
     def test_read_only_connector_rejects_insert(self):
-        from sidol import CapabilityError
         connector = FakeConnector([], writable=False)
         db = sidol.connect()
         db.register("incident", connector)

@@ -1,135 +1,149 @@
 # Sidol — Agent Coding Constitution
 
-> *"Simplicity is a prerequisite for reliability."* — Dijkstra  
-> *"Simple is not easy. Simple takes work."* — Rich Hickey  
-> *"The best code is no code at all."* — Jeff Atwood  
-> *"Don't be clever. Be obvious."* — George Hotz
+> *"Simplicity is a prerequisite for reliability."* — Dijkstra
 
 ---
 
-## Part I — The Philosophy (read this first)
+## Part I — What Sidol Is
 
-### 1. Simple Made Easy (Rich Hickey, 2011)
+Sidol is a SQL interface over heterogeneous data sources. A query arrives as a SQL string. It is parsed, routed to one or more connectors, executed, and returned as a list of dicts. That is the entire domain.
 
-The most important distinction in software:
+**A new contributor should be able to trace a query end-to-end — from `session.execute()` to the first yielded row — in under 10 minutes.** If they can't, something is too complex.
 
-| Word | Meaning | Test |
-|------|---------|------|
-| **Simple** | One role, one concept, one dimension | "How many things does this do?" |
-| **Easy** | Familiar, near, convenient | "Have I done this before?" |
-
-**Simple and easy are not the same.** A class that does two things is *easy to write* but *not simple*. Always choose simple over easy.
-
-**Complecting** = braiding two separate concerns into one thing. It is the root cause of all accidental complexity.
-
-> Before writing any function, class, or module, ask:  
-> *"What is the one thing this does? Can I name it in 4 words or fewer?"*  
-> If you can't — split it.
-
-**Prefer data.** Plain dicts, dataclasses, and primitives outlive clever objects. Data is the simplest possible thing. When in doubt, return a dict.
+Every decision in this document serves that goal.
 
 ---
 
-### 2. Karpathy Empiricism
+## Part II — The Three Laws
 
-> *"The first implementation is a hypothesis. Measure before you optimise."*
+### Law 1: One Thing
 
-- **Start with the dumbest thing that works.** A `for` loop over a list is almost always the right first answer. A generator, a cache, a connection pool — these are optimisations. Add them only when you have evidence they are needed.
-- **Delete code aggressively.** Code you don't have cannot have bugs. Every line is a liability. Ask: *"What breaks if I remove this?"* If the answer is "nothing obvious", remove it.
-- **Abstract only after the third repetition.** Copy once — that's fine. Copy twice — leave a comment. Copy three times — extract a function. Never abstract speculatively.
-- **If you can't explain it to a 12-year-old, you don't understand it.** Rewrite until you can.
+Before writing any function, class, or module, answer: **what is the one thing this does?**
 
----
+If you cannot answer in four words or fewer, split it.
 
-### 3. Hotz Minimalism
-
-> *"Complexity is the enemy. The solution is almost always simpler than you think."*
-
-- Ship the smallest possible thing that solves the real problem.
-- When you feel the urge to add a feature, ask: *"Do we need this right now?"* If not, don't build it.
-- A 50-line file that does one thing perfectly beats a 500-line "framework" every time.
-- The right architecture emerges from real constraints — not from anticipating future ones.
-
----
-
-### 4. Clean Code (Robert C. Martin)
-
-**Names reveal intent.**
 ```python
-# BAD — what is d?
+# BAD — does two things (fetches AND transforms)
+def get_user_records(filters):
+    rows = connector.fetch("users", filters=filters)
+    return [{"name": r["full_name"].title(), "id": r["user_id"]} for r in rows]
+
+# GOOD — each function does one thing
+def fetch_user_rows(filters):
+    return connector.fetch("users", filters=filters)
+
+def format_user_record(row):
+    return {"name": row["full_name"].title(), "id": row["user_id"]}
+```
+
+The word "and" in a function's description is a split signal. Not "fetches *and* validates". Not "parses *and* logs". One thing.
+
+### Law 2: Dependencies Point Inward
+
+```
+connectors/  →  core.py  →  registry.py / router.py  →  types.py / errors.py
+                                                          (import nothing)
+```
+
+`types.py` and `errors.py` are the innermost layer. They never import from Sidol.
+`core.py` never imports a connector directly — only `BaseConnector`.
+Connectors are plugins. You must be able to swap `ServiceNowConnector` for `MockConnector` without touching `core.py`.
+
+If a dependency points outward, invert it.
+
+### Law 3: Start Dumb, Stay Dumb Until Proven Otherwise
+
+The first implementation is a hypothesis. A `for` loop is almost always correct. A cache, a pool, a generator — these are optimisations. Add them only when you have a measured reason.
+
+**Abstract only after the third repetition.** Copy once — fine. Copy twice — leave a comment. Copy three times — extract a function. Never abstract speculatively.
+
+---
+
+## Part III — Python Rules
+
+### Naming
+
+Names reveal intent. If a name needs a comment to explain it, the name is wrong.
+
+```python
+# BAD
 def proc(d, f):
     return [x for x in d if x[f]]
 
-# GOOD — name tells the whole story
+# GOOD
 def filter_rows_by_column(rows: list[dict], column: str) -> list[dict]:
     return [row for row in rows if row[column]]
 ```
 
-**Functions do one thing.** Not "one thing and error handling". Not "one thing and logging". One thing. If you use the word "and" to describe what a function does, split it.
-
-**No side effects.** A function named `get_*` or `fetch_*` must never change state. A function that changes state must be named to show it.
-
-**The newspaper rule.** A file should read top-to-bottom like a news article: the most important thing first, details below. Public API at the top, private helpers at the bottom.
-
-**Comments explain *why*, not *what*.** If the code needs a comment to explain what it does, rename things until it doesn't.
-
----
-
-### 5. Clean Architecture (Robert C. Martin)
-
-**Dependencies point inward — always.**
-
-```
-connectors/  →  core.py  →  types.py / errors.py
-                              (depend on nothing)
-```
-
-- `types.py` and `errors.py` are the innermost layer. They import nothing from sidol.
-- `core.py` depends on `types`, `errors`, `registry`, `router`. Never on a connector directly.
-- Connectors are **plugins**. They implement `BaseConnector`. The core doesn't care which connector is used.
-- You must be able to swap `ServiceNowConnector` for `MockConnector` without touching `core.py`.
-
-**Boundaries protect the domain.** The SQL parsing boundary (`router.py`) means `core.py` never sees raw SQL strings after `parse()`. The connector boundary means `core.py` never makes HTTP calls.
-
----
-
-## Part II — Sidol-Specific Rules
-
-### Python Style
-
-- **All imports at the top of every file.** Never inside functions, loops, or conditionals.
-- **One class or one concept per file.** `csv_.py` holds only `CSVConnector`. No bundling.
-- **No metaclasses. No decorators beyond `@abstractmethod` and `@dataclass`.** If you need another decorator, write a comment explaining why.
-- **No `**kwargs` in public APIs.** Name every parameter explicitly. `**kwargs` hides the contract.
-- **Prefer flat over nested.** Max 3 nesting levels. If you hit 4, extract a function.
-- **Short functions.** Max 40 lines. If it's longer, it does more than one thing.
-- **Return early.** Guard clauses at the top, happy path at the bottom.
+- `get_*` and `fetch_*` functions must never mutate state.
+- Functions that mutate state must be named to show it: `clear_cache()`, `register_connector()`.
+- No single-letter variables except loop counters (`i`, `j`) and well-understood math (`n`).
 
 ### Imports
 
+All imports go at the top of the file. Never inside functions, loops, or conditionals.
+
 ```python
-# CORRECT — all imports at the top
+# CORRECT
 import sqlite3
 from sidol.errors import WriteError
 from sidol.types import WriteResult
 
-def my_function():
-    ...
+def my_function(): ...
 
 # WRONG — deferred import
 def my_function():
     from sidol.errors import WriteError  # never do this
-    ...
 ```
+
+### Functions
+
+- **Max 40 lines.** Longer means it does more than one thing.
+- **Max 3 nesting levels.** At level 4, extract a function.
+- **Return early.** Guard clauses at the top; happy path at the bottom.
+- **No side effects in getters.** A function named `get_*` returns. Period.
+
+```python
+# GOOD — guard clauses first
+def fetch_rows(table, limit):
+    if table not in self._schema:
+        raise SchemaError(f"Unknown table: {table}")
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
+    return self._connector.fetch(table, limit=limit)
+```
+
+### Classes and Files
+
+- One class or one concept per file. `csv_.py` holds only `CSVConnector`.
+- No metaclasses.
+- No decorators beyond `@abstractmethod` and `@dataclass`. `@property`, `@classmethod`, and `@staticmethod` are allowed. Custom decorators require a comment explaining why no other approach works.
+- No `**kwargs` in public APIs. Name every parameter explicitly. `**kwargs` hides the contract.
 
 ### Error Handling
 
 - Raise from `sidol.errors`. Never raise bare `Exception`.
-- Stdlib-level violations use builtins: `ValueError`, `TypeError`, `PermissionError`.
-- Always chain: `raise SidolError("msg") from original_exc`.
-- Never silently swallow. No bare `except: pass`. If you skip an error, write a comment saying exactly why.
+- Standard violations use builtins: `ValueError`, `TypeError`, `PermissionError`.
+- Always chain exceptions: `raise SidolError("msg") from original_exc`.
+- Never swallow silently. No bare `except: pass`. If skipping an error is correct, write a comment saying exactly why.
 
-### Connector Contract
+### Comments
+
+Comments explain *why*, not *what*. If code needs a comment to explain what it does, rename things until it doesn't.
+
+```python
+# BAD — explains what
+# iterate over rows and return matches
+return [row for row in rows if row[column]]
+
+# GOOD — explains why
+# ServiceNow paginates at 1000 rows; offset keeps our position across pages
+offset = page * 1000
+```
+
+---
+
+## Part IV — The Connector Contract
 
 Every connector implements `BaseConnector` in `connectors/base.py`:
 
@@ -139,15 +153,62 @@ def fetch(self, table, columns, filters, limit, offset) -> Iterator[dict]: ...
 def capabilities(self) -> Capabilities: ...
 ```
 
-Writable connectors also implement `insert`, `update`, `delete`.
+Writable connectors also implement:
 
+```python
+def insert(self, table, rows) -> WriteResult: ...
+def update(self, table, updates, filters) -> WriteResult: ...
+def delete(self, table, filters) -> WriteResult: ...
+```
+
+**Rules:**
 - `fetch()` always yields `dict` rows — never lists, never tuples.
 - `insert/update/delete` always return `WriteResult(affected_rows=n)`.
 - `close()` must be safe to call multiple times (idempotent).
+- Connectors never import from `core.py`. The dependency goes one way.
 
-### SQL Scope — v1 Hard Limits
+### Minimal Working Connector
 
-Do not add support for:
+This is the floor. Every new connector starts here:
+
+```python
+# sidol/connectors/example.py
+from collections.abc import Iterator
+from sidol.connectors.base import BaseConnector
+from sidol.types import Schema, Column, Capabilities, WriteResult
+
+
+class ExampleConnector(BaseConnector):
+
+    def __init__(self, source):
+        self._source = source
+        self._closed = False
+
+    def schema(self) -> Schema:
+        return Schema(tables={
+            "items": [Column(name="id", dtype="int"), Column(name="name", dtype="str")]
+        })
+
+    def capabilities(self) -> Capabilities:
+        return Capabilities(writable=False)
+
+    def fetch(self, table, columns=None, filters=None, limit=None, offset=0) -> Iterator[dict]:
+        for row in self._source:
+            yield row
+
+    def close(self):
+        self._closed = True  # safe to call again — idempotent
+```
+
+Add a direct import to `sidol/__init__.py`. Add tests to `test_sidol_core.py`. No other files change.
+
+---
+
+## Part V — SQL Scope (v1 Hard Limits)
+
+`SELECT` is unlimited — DuckDB handles it.
+
+**Do not add support for:**
 - Cross-connector transactions
 - DDL (`CREATE TABLE`, `ALTER TABLE`, etc.)
 - Subqueries in DML
@@ -155,11 +216,32 @@ Do not add support for:
 - Multi-table DML (JOINs in `UPDATE`/`DELETE`)
 - Streaming / async iteration
 
-`SELECT` is unlimited — DuckDB handles it.
+If someone asks for one of the above: decline, explain the v1 boundary, and record it as a future issue. These are not omissions — they are deliberate constraints that keep the codebase traceable.
 
-> If someone asks you to add one of the above: say no, explain the v1 boundary, and record it as a future issue.
+---
 
-### File Layout
+## Part VI — Why We Said No
+
+These are real decisions. They are here so no one re-litigates them without knowing the reasoning.
+
+**Why not async?**
+v1 connectors are I/O-bound but not high-concurrency. Sync code is debuggable by anyone. `asyncio` adds a second execution model that every contributor must understand. We will revisit when we have a measured concurrency bottleneck.
+
+**Why not SQLAlchemy?**
+We need to own the SQL parsing boundary. A dependency that owns SQL parsing owns a core piece of `router.py`. SQLAlchemy is excellent software — it solves a different problem than Sidol solves.
+
+**Why not one big `connectors.py` file?**
+When a connector breaks, you want the blast radius to be exactly one file. Co-location makes that impossible. One file per connector means one file per failure.
+
+**Why not `**kwargs` in connector methods?**
+`**kwargs` makes the contract invisible. A new connector author cannot know what keys are expected without reading every caller. Explicit parameters are documentation.
+
+**Why not support `RETURNING`?**
+`RETURNING` is not supported by all backends we target. Faking it in the core would either lie to the caller or couple core logic to backend capability detection. The v1 answer is: fetch again after writing.
+
+---
+
+## Part VII — File Layout
 
 ```
 sidol/
@@ -169,34 +251,40 @@ sidol/
   errors.py         # exception hierarchy — imports nothing
   registry.py       # ConnectorRegistry
   router.py         # parse, extract_*, strict v1 validation guards
-  types.py          # Column, Schema, Capabilities, WriteResult, Result — imports nothing
+  types.py          # Column, Schema, Capabilities, WriteResult — imports nothing
   connectors/
     base.py         # BaseConnector (abstract)
     csv_.py         # CSVConnector
     servicenow.py   # ServiceNowConnector
     sqlite_.py      # SQLiteConnector
 tests/
-  test_sidol_core.py  # all tests live here
+  test_sidol_core.py
 ```
 
-**Adding a connector:** create `connectors/<name>.py`, subclass `BaseConnector`, add a direct import to `sidol/__init__.py`, add tests to `test_sidol_core.py`. That's it — no other files change.
+The newspaper rule applies to every file: most important thing at the top, implementation details at the bottom. Public API before private helpers.
 
-### Testing
+---
 
-- Every connector must have tests for: `schema()`, `fetch()`, `insert()`, `update()`, `delete()`.
-- No real network in tests — use `httpx.MockTransport` or in-memory DBs.
+## Part VIII — Testing
+
+- Every connector must test: `schema()`, `fetch()`, `insert()`, `update()`, `delete()`.
+- No real network calls in tests — use `httpx.MockTransport` or in-memory DBs.
 - No temp files left behind — use `tempfile` and clean up in `tearDown`.
 - Run: `uv run python -m unittest tests.test_sidol_core -v`
 
 ---
 
-## Part III — Decision Checklist
+## Part IX — Pre-Commit Checklist
 
-Before writing or changing any code, answer these:
+Answer every question before opening a PR. These are pass/fail, not aspirational.
 
-1. **What is the one thing this does?** (If you can't answer in 4 words, split it.)
-2. **What is the simplest possible implementation?** (Start there. Optimise later.)
-3. **What can I delete?** (Every line removed is a win.)
-4. **Does this complect two concerns?** (If yes, separate them.)
-5. **Does this dependency point inward?** (If it doesn't, invert it.)
-6. **Will a new contributor understand this in 60 seconds?** (If not, simplify or rename.)
+| Check | Pass | Fail |
+|-------|------|------|
+| Single responsibility | Name fits in 4 words or fewer | Description uses "and" |
+| Dependency direction | Only imports from inner layers | Connector imports from core |
+| Side-effect safety | `get_*` functions only return | `get_*` mutates state |
+| Import placement | All imports at file top | Any import inside a function |
+| Error chaining | `raise X from original` | Bare `raise X(msg)` after a catch |
+| Test coverage | schema, fetch, write all tested | Any method untested |
+| No silent swallow | Every `except` has a comment | Bare `except: pass` |
+| v1 boundary | No new DML/DDL/async features | Any item from the hard-limits list |
