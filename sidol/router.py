@@ -50,7 +50,7 @@ def extract_table(tree: exp.Expression) -> str:
     t = tree.find(exp.Table)
     if not t:
         raise SidolError("Could not find target table in SQL")
-    return t.name.lower()
+    return t.name
 
 
 def _reject_unsupported_dml(tree: exp.Expression) -> None:

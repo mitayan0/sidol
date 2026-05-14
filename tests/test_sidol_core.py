@@ -47,7 +47,7 @@ class FakeConnector(BaseConnector):
         cols = [Column(k, "text") for k in (self._rows[0] if self._rows else {})]
         return Schema(tables={"items": cols})
 
-    def fetch(self, table, columns, filters, limit, offset):
+    def fetch(self, table, columns, filters, limit, offset, context=None):
         yield from self._rows
 
     def capabilities(self) -> Capabilities:
@@ -58,15 +58,15 @@ class FakeConnector(BaseConnector):
             deletable=self._writable,
         )
 
-    def insert(self, table, rows) -> WriteResult:
+    def insert(self, table, rows, context=None) -> WriteResult:
         self.inserts.append(rows)
         return WriteResult(affected_rows=len(rows))
 
-    def update(self, table, values, filters) -> WriteResult:
+    def update(self, table, values, filters, context=None) -> WriteResult:
         self.updates.append((values, filters))
         return WriteResult(affected_rows=1)
 
-    def delete(self, table, filters) -> WriteResult:
+    def delete(self, table, filters, context=None) -> WriteResult:
         self.deletes.append(filters)
         return WriteResult(affected_rows=1)
 

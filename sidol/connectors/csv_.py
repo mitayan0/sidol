@@ -10,6 +10,7 @@ from typing import Any
 import duckdb
 
 from sidol.connectors.base import BaseConnector
+from sidol.context import ConnectorContext
 from sidol.types import Capabilities, Column, Schema, WriteResult
 
 # DuckDB type -> sidol type mapping
@@ -78,6 +79,7 @@ class CSVConnector(BaseConnector):
         filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
+        context: ConnectorContext | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield rows from CSV using DuckDB."""
         if not self.path.exists():
@@ -120,7 +122,7 @@ class CSVConnector(BaseConnector):
             return f"{col} {op} '{val}'"
         return f"{col} {op} {val}"
 
-    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Append rows to CSV file."""
         if not self._writable:
             raise PermissionError(
@@ -145,7 +147,7 @@ class CSVConnector(BaseConnector):
 
         return WriteResult(affected_rows=len(rows))
 
-    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Update matching rows (full file rewrite)."""
         if not self._writable:
             raise PermissionError("CSVConnector is read-only.")
@@ -164,7 +166,7 @@ class CSVConnector(BaseConnector):
         self._rewrite(all_rows)
         return WriteResult(affected_rows=affected)
 
-    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Delete matching rows (full file rewrite)."""
         if not self._writable:
             raise PermissionError("CSVConnector is read-only.")

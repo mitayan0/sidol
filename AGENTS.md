@@ -98,8 +98,8 @@ def my_function():
 
 ### Functions
 
-- **Max 40 lines.** Longer means it does more than one thing.
-- **Max 3 nesting levels.** At level 4, extract a function.
+- **Unit of Thought (Limit: 40 lines).** A function should do one thing and fit on one screen without scrolling. If you have to scroll to see the return statement, you have lost the context of the parameters. The 40-line limit is a "hard-stop" signal that the code has become too complex.
+- **Max 3 nesting levels.** At level 4, extract a function. Deep nesting exponentially increases cognitive load.
 - **Return early.** Guard clauses at the top; happy path at the bottom.
 - **No side effects in getters.** A function named `get_*` returns. Period.
 

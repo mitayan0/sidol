@@ -27,6 +27,7 @@ from sidol.errors import (
     UnsupportedSQLError,
     WriteError,
 )
+from sidol.testing import BaseConnectorTestCase
 from sidol.types import (
     Capabilities,
     Column,
@@ -83,4 +84,5 @@ __all__ = [
     "CSVConnector",
     "SQLiteConnector",
     "AirtableConnector",
+    "BaseConnectorTestCase",
 ]

@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
+from sidol.context import ConnectorContext
 from sidol.types import Capabilities, Schema, WriteResult
 
 
@@ -29,29 +30,38 @@ class BaseConnector(ABC):
         self,
         table: str,
         columns: list[str] | None,
-        filters: list[dict[str, Any]],     # [{"col": "x", "op": "=", "val": 1}]
+        filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
+        context: ConnectorContext | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield rows as dicts. Called for SELECT operations.
+        """Yield rows as dicts. Called for SELECT operations."""
 
-        Args:
-            table: Table name to fetch from
-            columns: List of column names to fetch, or None for all
-            filters: List of filter dicts with keys: col, op, val
-            limit: Maximum rows to return
-            offset: Rows to skip
-        """
-
-    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
+    def insert(
+        self,
+        table: str,
+        rows: list[dict[str, Any]],
+        context: ConnectorContext | None = None,
+    ) -> WriteResult:
         """Insert rows. Raises NotImplementedError if not insertable."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support INSERT")
 
-    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
+    def update(
+        self,
+        table: str,
+        values: dict[str, Any],
+        filters: list[dict[str, Any]],
+        context: ConnectorContext | None = None,
+    ) -> WriteResult:
         """Update rows matching filters with values."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support UPDATE")
 
-    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
+    def delete(
+        self,
+        table: str,
+        filters: list[dict[str, Any]],
+        context: ConnectorContext | None = None,
+    ) -> WriteResult:
         """Delete rows matching filters."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support DELETE")
 

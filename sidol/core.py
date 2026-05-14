@@ -10,6 +10,7 @@ import sqlglot
 import sqlglot.expressions as exp
 
 from sidol.connectors.base import BaseConnector
+from sidol.context import ConnectorContext
 from sidol.errors import (
     CapabilityError,
     TableNotFoundError,
@@ -48,6 +49,7 @@ class Session:
         self._registry = ConnectorRegistry()
         self._duckdb = duckdb.connect(":memory:")
         self._default_connector: BaseConnector | None = None
+        self._context = ConnectorContext()
 
     def register(self, name: str, connector: BaseConnector) -> Session:
         """Register a connector under a table name.
@@ -56,7 +58,6 @@ class Session:
             name: The logical table name for SQL queries
             connector: A BaseConnector instance
         """
-        name = name.lower()
         self._registry.register_table(name, connector)
         return self
 
@@ -67,8 +68,7 @@ class Session:
 
     def unregister(self, name: str) -> Session:
         """Remove a registered connector and close it."""
-        name = name.lower()
-        entry = self._registry._tables.get(name)
+        entry = self._registry._tables.get(name.lower())
         if not entry:
             return self
         entry.connector.close()
@@ -111,15 +111,15 @@ class Session:
 
         if stype == "INSERT":
             self._check_capability(connector, caps.insertable, "INSERT")
-            return connector.insert(table, extract_insert_rows(tree))
+            return connector.insert(table, extract_insert_rows(tree), context=self._context)
 
         if stype == "UPDATE":
             self._check_capability(connector, caps.updatable, "UPDATE")
-            return connector.update(table, extract_update_set(tree), extract_filters(tree, require_where=True))
+            return connector.update(table, extract_update_set(tree), extract_filters(tree, require_where=True), context=self._context)
 
         if stype == "DELETE":
             self._check_capability(connector, caps.deletable, "DELETE")
-            return connector.delete(table, extract_filters(tree, require_where=True))
+            return connector.delete(table, extract_filters(tree, require_where=True), context=self._context)
 
         raise UnsupportedSQLError(f"Statement type not supported: {stype}")
 
@@ -155,10 +155,43 @@ class Session:
             connector = self._default_connector
             native_table = table_name
 
-        fetched = list(connector.fetch(native_table, None, [], None, None))
+        fetched = list(connector.fetch(native_table, None, [], None, None, context=self._context))
         if fetched:
-            arrow_table = pa.Table.from_pylist(fetched)
-            self._duckdb.register(table_name, arrow_table)
+            # Map sidol types to pyarrow types if schema is available
+            schema_hints = connector.schema().tables.get(native_table, [])
+            pa_schema = None
+            if schema_hints:
+                fields = []
+                type_map = {
+                    "text": pa.string(),
+                    "int": pa.int64(),
+                    "float": pa.float64(),
+                    "bool": pa.bool_(),
+                    "json": pa.string(),
+                    "timestamp": pa.string(), # Fallback for now
+                }
+                for col in schema_hints:
+                    fields.append(pa.field(col.name, type_map.get(col.type, pa.string()), nullable=True))
+                pa_schema = pa.schema(fields)
+
+            try:
+                if pa_schema:
+                    # Filter data to only include columns in schema, or arrow might complain
+                    schema_cols = {f.name for f in pa_schema}
+                    safe_fetched = []
+                    for row in fetched:
+                        safe_fetched.append({k: v for k, v in row.items() if k in schema_cols})
+                    arrow_table = pa.Table.from_pylist(safe_fetched, schema=pa_schema)
+                else:
+                    arrow_table = pa.Table.from_pylist(fetched)
+                self._duckdb.register(table_name, arrow_table)
+            except Exception:
+                # Last resort: convert everything to string
+                stringified = []
+                for row in fetched:
+                    stringified.append({k: str(v) if v is not None else None for k, v in row.items()})
+                arrow_table = pa.Table.from_pylist(stringified)
+                self._duckdb.register(table_name, arrow_table)
 
     def _get_connector(self, table: str) -> BaseConnector:
         """Get connector for a table, raising helpful error if not found."""

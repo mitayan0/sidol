@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from sidol.connectors.base import BaseConnector
+from sidol.context import ConnectorContext
 from sidol.types import Capabilities, Column, Schema, WriteResult
 
 # SQLite affinity -> sidol type mapping
@@ -77,6 +78,7 @@ class SQLiteConnector(BaseConnector):
         filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
+        context: ConnectorContext | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield rows from SQLite."""
         col_str = ", ".join(columns) if columns else "*"
@@ -96,7 +98,7 @@ class SQLiteConnector(BaseConnector):
         finally:
             conn.close()
 
-    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Insert rows into SQLite."""
         if not rows:
             return WriteResult(affected_rows=0)
@@ -123,7 +125,7 @@ class SQLiteConnector(BaseConnector):
         finally:
             conn.close()
 
-    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Update rows matching filters."""
         if not values:
             return WriteResult(affected_rows=0)
@@ -139,7 +141,7 @@ class SQLiteConnector(BaseConnector):
         finally:
             conn.close()
 
-    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Delete rows matching filters."""
         where_clause, params = _build_where(filters)
         q = f"DELETE FROM {table}{where_clause}"

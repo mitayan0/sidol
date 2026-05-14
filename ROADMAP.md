@@ -50,13 +50,15 @@ Use this list to track implementation work in-repo.
 
 ---
 
-## Phase 3 — SDK Surface & Federation (current focus)
+## Phase 3 — SDK Surface & Federation (complete)
 
-## Phase 3 — SDK surface
-
-After **three** connectors you have written yourself (tighten to “three non-trivial adapters” if needed): `sidol.testing`, `ConnectorContext`, richer `Capabilities` + `Session` wiring, `CONNECTOR_GUIDE.md`.
+- [x] Create `sidol.testing` with `BaseConnectorTestCase`.
+- [x] Formalize `ConnectorContext` for session metadata.
+- [x] Write `CONNECTOR_GUIDE.md` for contributors.
 
 ---
+
+## Phase 4 — Resilience & Performance (current focus)
 
 ## Diagram
 

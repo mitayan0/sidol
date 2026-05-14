@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -9,6 +10,7 @@ import httpx
 
 from sidol.connectors import airtable_utils as utils
 from sidol.connectors.base import BaseConnector
+from sidol.context import ConnectorContext
 from sidol.errors import ConnectorError, WriteError
 from sidol.types import Capabilities, Column, Schema, WriteResult
 
@@ -48,37 +50,49 @@ class AirtableConnector(BaseConnector):
 
     def schema(self) -> Schema:
         """Return schema by inferring from the first page of records.
-        Airtable's Meta API is available but often restricted; first-row inference is 'dumb' but reliable.
+        If no specific table is set, lists all tables via Metadata API first.
         """
-        table = self.table
-        if not table:
+        # 1. Identify which tables to describe
+        target_tables = [self.table] if self.table else []
+        
+        if not target_tables:
+            # Fetch all table names from Metadata API
+            try:
+                url = f"https://api.airtable.com/v0/meta/bases/{self.base_id}/tables"
+                resp = self.client.get(url)
+                if resp.status_code == 200:
+                    target_tables = [t["name"] for t in resp.json().get("tables", [])]
+            except Exception:
+                pass
+
+        if not target_tables:
             return Schema(tables={})
 
-        # Fetch 1 record to see columns
-        try:
-            resp = self.client.get(self._url(table), params={"maxRecords": 1})
-            if resp.status_code >= 400:
-                # If we can't fetch, return empty schema for that table
-                return Schema(tables={table: []})
+        # 2. Build schema for each table (first row inference)
+        result_tables = {}
+        for table_name in target_tables:
+            try:
+                resp = self.client.get(self._url(table_name), params={"maxRecords": 1})
+                if resp.status_code != 200:
+                    continue
+                
+                records = resp.json().get("records", [])
+                if not records:
+                    result_tables[table_name] = [Column(name="id", type="text", primary_key=True)]
+                    continue
 
-            data = resp.json()
-            records = data.get("records", [])
-            if not records:
-                return Schema(tables={table: []})
+                flat = utils.flatten_record(records[0])
+                cols = []
+                for name, val in flat.items():
+                    dtype = "text"
+                    if isinstance(val, bool): dtype = "bool"
+                    elif isinstance(val, (int, float)): dtype = "float"
+                    cols.append(Column(name=name, type=dtype, primary_key=(name == "id")))
+                result_tables[table_name] = cols
+            except Exception:
+                continue
 
-            flat = utils.flatten_record(records[0])
-            cols = []
-            for name, val in flat.items():
-                dtype = "text"
-                if isinstance(val, bool):
-                    dtype = "bool"
-                elif isinstance(val, (int, float)):
-                    dtype = "float"
-                cols.append(Column(name=name, type=dtype, primary_key=(name == "id")))
-
-            return Schema(tables={table: cols})
-        except Exception:
-            return Schema(tables={table: []})
+        return Schema(tables=result_tables)
 
     def fetch(
         self,
@@ -87,6 +101,7 @@ class AirtableConnector(BaseConnector):
         filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
+        context: ConnectorContext | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield rows from Airtable using pagination and filterByFormula."""
         yielded = 0
@@ -95,8 +110,11 @@ class AirtableConnector(BaseConnector):
         while limit is None or yielded < limit:
             params: dict[str, Any] = {}
             if columns:
-                # Airtable uses 'fields[]' repeated params
-                params["fields"] = columns
+                # Airtable uses 'fields[]' repeated params. 
+                # 'id' is a top-level property, not a field, so we must exclude it from this param.
+                real_cols = [c for c in columns if c != "id"]
+                if real_cols:
+                    params["fields"] = real_cols
             formula = utils.build_formula(filters)
             if formula:
                 params["filterByFormula"] = formula
@@ -117,14 +135,22 @@ class AirtableConnector(BaseConnector):
             for rec in records:
                 if limit is not None and yielded >= limit:
                     return
-                yield utils.flatten_record(rec)
+                flat = utils.flatten_record(rec)
+                # Ensure all values are SQL-friendly (scalars or JSON strings)
+                clean_row = {}
+                for k, v in flat.items():
+                    if isinstance(v, (list, dict)):
+                        clean_row[k] = json.dumps(v)
+                    else:
+                        clean_row[k] = v
+                yield clean_row
                 yielded += 1
 
             airtable_offset = data.get("offset")
             if not airtable_offset:
                 break
 
-    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Insert records in chunks of 10."""
         if not rows:
             return WriteResult(affected_rows=0)
@@ -144,7 +170,7 @@ class AirtableConnector(BaseConnector):
 
         return WriteResult(affected_rows=len(results), returned=results)
 
-    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Update records matching filters. Requires fetching sys_ids first."""
         # Airtable PATCH requires record IDs.
         # We fetch matching records to get their IDs.
@@ -168,7 +194,7 @@ class AirtableConnector(BaseConnector):
 
         return WriteResult(affected_rows=len(results), returned=results)
 
-    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Delete records matching filters."""
         matches = list(self.fetch(table, ["id"], filters, limit=None, offset=None))
         if not matches:

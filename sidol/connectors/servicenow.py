@@ -8,6 +8,7 @@ import httpx
 
 from sidol.connectors import servicenow_utils as sn_utils
 from sidol.connectors.base import BaseConnector
+from sidol.context import ConnectorContext
 from sidol.errors import ConnectorError, WriteError
 from sidol.types import Capabilities, Column, Schema, WriteResult
 
@@ -306,6 +307,7 @@ class ServiceNowConnector(BaseConnector):
         filters: list[dict[str, Any]],
         limit: int | None,
         offset: int | None,
+        context: ConnectorContext | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield rows from ServiceNow Table API."""
         yielded = 0
@@ -349,7 +351,7 @@ class ServiceNowConnector(BaseConnector):
             params["sysparm_display_value"] = "all"
         return params
 
-    def insert(self, table: str, rows: list[dict[str, Any]]) -> WriteResult:
+    def insert(self, table: str, rows: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Insert rows via ServiceNow POST."""
         results = []
         for row in rows:
@@ -358,7 +360,7 @@ class ServiceNowConnector(BaseConnector):
             results.append(sn_utils.flatten_row(payload.get("result", {})))
         return WriteResult(affected_rows=len(results), returned=results)
 
-    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]]) -> WriteResult:
+    def update(self, table: str, values: dict[str, Any], filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Update rows via ServiceNow PATCH."""
         sys_ids = self._resolve_sys_ids(filters, table)
         results = []
@@ -376,7 +378,7 @@ class ServiceNowConnector(BaseConnector):
             return data
         return [data] if data else []
 
-    def delete(self, table: str, filters: list[dict[str, Any]]) -> WriteResult:
+    def delete(self, table: str, filters: list[dict[str, Any]], context: ConnectorContext | None = None) -> WriteResult:
         """Delete rows via ServiceNow DELETE."""
         sys_ids = self._resolve_sys_ids(filters, table)
         for sys_id in sys_ids:
