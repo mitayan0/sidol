@@ -3,7 +3,7 @@
 sidol (𝘴𝘪𝘥𝘰𝘭) — the fermented fish paste that connects everything in Chakma cuisine.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 # Core API
 # Connector base
