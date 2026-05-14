@@ -29,7 +29,7 @@ def airtable_literal(val: Any) -> str:
 
 def filter_atom(col: str, op: str, val: Any) -> str | None:
     """One Airtable formula atom, or None to skip."""
-    # Airtable uses {Field Name} for column references, 
+    # Airtable uses {Field Name} for column references,
     # but for the record ID itself, we must use RECORD_ID()
     field = "RECORD_ID()" if col == "id" else f"{{{col}}}"
     literal = airtable_literal(val)

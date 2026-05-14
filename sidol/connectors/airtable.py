@@ -54,7 +54,7 @@ class AirtableConnector(BaseConnector):
         """
         # 1. Identify which tables to describe
         target_tables = [self.table] if self.table else []
-        
+
         if not target_tables:
             # Fetch all table names from Metadata API
             try:
@@ -75,7 +75,7 @@ class AirtableConnector(BaseConnector):
                 resp = self.client.get(self._url(table_name), params={"maxRecords": 1})
                 if resp.status_code != 200:
                     continue
-                
+
                 records = resp.json().get("records", [])
                 if not records:
                     result_tables[table_name] = [Column(name="id", type="text", primary_key=True)]
@@ -85,8 +85,10 @@ class AirtableConnector(BaseConnector):
                 cols = []
                 for name, val in flat.items():
                     dtype = "text"
-                    if isinstance(val, bool): dtype = "bool"
-                    elif isinstance(val, (int, float)): dtype = "float"
+                    if isinstance(val, bool):
+                        dtype = "bool"
+                    elif isinstance(val, (int, float)):
+                        dtype = "float"
                     cols.append(Column(name=name, type=dtype, primary_key=(name == "id")))
                 result_tables[table_name] = cols
             except Exception:
@@ -110,7 +112,7 @@ class AirtableConnector(BaseConnector):
         while limit is None or yielded < limit:
             params: dict[str, Any] = {}
             if columns:
-                # Airtable uses 'fields[]' repeated params. 
+                # Airtable uses 'fields[]' repeated params.
                 # 'id' is a top-level property, not a field, so we must exclude it from this param.
                 real_cols = [c for c in columns if c != "id"]
                 if real_cols:
