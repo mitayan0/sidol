@@ -130,20 +130,21 @@ class Session:
 
     def _execute_select(self, query: str) -> QueryResult:
         """Execute SELECT via DuckDB after registering necessary tables."""
-        self._register_query_tables(query)
+        tree = cast(exp.Expression, sqlglot.parse_one(query))
+        tables = [t.name for t in tree.find_all(exp.Table)]
+        # Pushdown only when there is a single table — multi-table queries
+        # (JOINs) require per-table filter attribution which is out of v1 scope.
+        where_filters = extract_filters(tree) if len(tables) == 1 else []
+        for name in tables:
+            self._register_table_with_duckdb(name, where_filters)
         arrow_result = self._duckdb.execute(query).to_arrow_table()
         cols = list(arrow_result.column_names)
         result_rows = [tuple(r.values()) for r in arrow_result.to_pylist()]
         return QueryResult(columns=cols, rows=result_rows)
 
-    def _register_query_tables(self, query: str) -> None:
-        """Find and register all tables in a query with DuckDB."""
-        tree = sqlglot.parse_one(query)
-        tables = [t.name for t in tree.find_all(exp.Table)]
-        for name in tables:
-            self._register_table_with_duckdb(name)
-
-    def _register_table_with_duckdb(self, table_name: str) -> None:
+    def _register_table_with_duckdb(
+        self, table_name: str, pushdown_filters: list[dict[str, Any]] | None = None
+    ) -> None:
         """Fetch data from connector and register as a view in DuckDB."""
         try:
             entry = self._registry.resolve(table_name)
@@ -155,7 +156,9 @@ class Session:
             connector = self._default_connector
             native_table = table_name
 
-        fetched = list(connector.fetch(native_table, None, [], None, None, context=self._context))
+        caps = connector.capabilities()
+        filters = pushdown_filters if (caps.filter_pushdown and pushdown_filters) else []
+        fetched = list(connector.fetch(native_table, None, filters, None, None, context=self._context))
         if fetched:
             # Map sidol types to pyarrow types if schema is available
             schema_hints = connector.schema().tables.get(native_table, [])
@@ -186,7 +189,11 @@ class Session:
                     arrow_table = pa.Table.from_pylist(fetched)
                 self._duckdb.register(table_name, arrow_table)
             except Exception:
-                # Last resort: convert everything to string
+                # pyarrow rejects rows whose column types are inconsistent (e.g. a
+                # column that holds both ints and strings across pages).  Converting
+                # every value to str is lossy but always succeeds and lets DuckDB
+                # still run the query.  A connector that returns clean types should
+                # never reach this branch.
                 stringified = []
                 for row in fetched:
                     stringified.append({k: str(v) if v is not None else None for k, v in row.items()})

@@ -1,5 +1,6 @@
 from sidol import AirtableConnector, BaseConnectorTestCase
 
+
 class TestAirtableConnector(BaseConnectorTestCase):
     def setUp(self):
         super().setUp()
@@ -23,10 +24,10 @@ class TestAirtableConnector(BaseConnectorTestCase):
                 "createdTime": "2023-01-01T00:00:00.000Z"
             }]
         })
-        
+
         conn = self._get_connector()
         schema = conn.schema()
-        
+
         cols = {c.name: c for c in schema.tables[self.table]}
         self.assertIn("id", cols)
         self.assertEqual(cols["Name"].type, "text")
@@ -35,11 +36,11 @@ class TestAirtableConnector(BaseConnectorTestCase):
 
     def test_fetch_with_formula(self):
         self.mock_response(200, json_data={"records": [{"id": "rec1", "fields": {"Name": "X"}}]})
-        
+
         conn = self._get_connector()
         filters = [{"col": "Name", "op": "=", "val": "Test"}]
         list(conn.fetch(self.table, None, filters, limit=1, offset=0))
-        
+
         params = self.mock_calls[0].url.params
         self.assertEqual(params["filterByFormula"], "{Name} = 'Test'")
 
@@ -49,7 +50,7 @@ class TestAirtableConnector(BaseConnectorTestCase):
             "offset": "next_page"
         })
         self.mock_response(200, json_data={"records": [{"id": "rec2"}]})
-        
+
         conn = self._get_connector()
         rows = list(conn.fetch(self.table, None, [], limit=None, offset=0))
         self.assertEqual(len(rows), 2)
@@ -60,11 +61,11 @@ class TestAirtableConnector(BaseConnectorTestCase):
         # We need 2 responses for 15 records (10 + 5)
         self.mock_response(200, json_data={"records": [{"id": f"r{i}", "fields": {}} for i in range(10)]})
         self.mock_response(200, json_data={"records": [{"id": f"r{i}", "fields": {}} for i in range(10, 15)]})
-        
+
         conn = self._get_connector()
         rows = [{"Name": f"T{i}"} for i in range(15)]
         res = conn.insert(self.table, rows)
-        
+
         self.assert_write_result(res, 15)
         self.assertEqual(len(self.mock_calls), 2)
 
@@ -72,10 +73,10 @@ class TestAirtableConnector(BaseConnectorTestCase):
         # 1 GET to find IDs, then 1 DELETE
         self.mock_response(200, json_data={"records": [{"id": "rec1"}, {"id": "rec2"}]})
         self.mock_response(200, json_data={"deleted": True})
-        
+
         conn = self._get_connector()
         res = conn.delete(self.table, [{"col": "Name", "op": "=", "val": "X"}])
-        
+
         self.assert_write_result(res, 2)
         self.assertEqual(self.mock_calls[0].method, "GET")
         self.assertEqual(self.mock_calls[1].method, "DELETE")

@@ -58,7 +58,14 @@ Use this list to track implementation work in-repo.
 
 ---
 
-## Phase 4 — Resilience & Performance (current focus)
+## Phase 4 — Resilience & Performance (complete)
+
+- [x] Document silent `except Exception` in `core.py` — added comment explaining the string-coercion fallback.
+- [x] Extract `TTLCache` to `sidol/cache.py` — aligns with AGENTS.md file layout; `AirtableConnector` now also caches schema.
+- [x] Retry/backoff on 429 & 503 — `sidol/connectors/http_utils.py` provides `request_with_retry`; ServiceNow and Airtable both use it; honours `Retry-After` header.
+- [x] SELECT filter pushdown — `Session._execute_select` extracts WHERE filters for single-table queries and passes them to `fetch()` when `Capabilities.filter_pushdown` is `True`.
+
+---
 
 ## Diagram
 
@@ -68,7 +75,9 @@ flowchart LR
   P1[Phase1_ExtractInPlace]
   P2[Phase2_SecondConnector]
   P3[Phase3_SDKSurface]
+  P4[Phase4_ResiliencePerf]
   P0 --> P1
   P1 --> P2
   P2 --> P3
+  P3 --> P4
 ```

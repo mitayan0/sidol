@@ -1,44 +1,16 @@
 import json
-import time
 from collections.abc import Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
+from sidol.cache import TTLCache
+from sidol.connectors import http_utils
 from sidol.connectors import servicenow_utils as sn_utils
 from sidol.connectors.base import BaseConnector
 from sidol.context import ConnectorContext
 from sidol.errors import ConnectorError, WriteError
 from sidol.types import Capabilities, Column, Schema, WriteResult
-
-
-@dataclass
-class CacheEntry:
-    value: Any
-    expires_at: float
-
-
-class TTLCache:
-    """Simple in-memory TTL cache for ServiceNow schema/metadata."""
-
-    def __init__(self, default_ttl: int = 300):
-        self._store: dict[str, CacheEntry] = {}
-        self.default_ttl = default_ttl
-
-    def get(self, key: str) -> Any | None:
-        entry = self._store.get(key)
-        if entry is None:
-            return None
-        if time.time() > entry.expires_at:
-            del self._store[key]
-            return None
-        return entry.value
-
-    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        duration = ttl if ttl is not None else self.default_ttl
-        self._store[key] = CacheEntry(value=value, expires_at=time.time() + duration)
-
 
 # ServiceNow Table API -> sidol type mapping
 _SNOW_TYPE_MAP = {
@@ -184,10 +156,10 @@ class ServiceNowConnector(BaseConnector):
         self.client.headers["Authorization"] = f"Bearer {self._oauth_access_token}"
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        response = self.client.request(method, url, **kwargs)
+        response = http_utils.request_with_retry(self.client, method, url, **kwargs)
         if response.status_code == 401 and self._oauth_can_refresh():
             self._exchange_oauth_refresh_token()
-            response = self.client.request(method, url, **kwargs)
+            response = http_utils.request_with_retry(self.client, method, url, **kwargs)
         return response
 
     def _require_ok(self, response: httpx.Response, operation: str, *, is_write: bool) -> None:

@@ -6,6 +6,9 @@ sidol (𝘴𝘪𝘥𝘰𝘭) — the fermented fish paste that connects everythi
 __version__ = "0.1.3"
 
 # Core API
+# Cache
+from sidol.cache import TTLCache
+
 # Connector base
 from sidol.connectors.airtable import AirtableConnector
 from sidol.connectors.base import BaseConnector
@@ -85,4 +88,5 @@ __all__ = [
     "SQLiteConnector",
     "AirtableConnector",
     "BaseConnectorTestCase",
+    "TTLCache",
 ]

@@ -42,12 +42,14 @@ class FakeConnector(BaseConnector):
         self.inserts: list[list[dict]] = []
         self.updates: list[tuple] = []
         self.deletes: list[list[dict]] = []
+        self._last_fetch_filters: list[dict] = []
 
     def schema(self) -> Schema:
         cols = [Column(k, "text") for k in (self._rows[0] if self._rows else {})]
         return Schema(tables={"items": cols})
 
     def fetch(self, table, columns, filters, limit, offset, context=None):
+        self._last_fetch_filters = list(filters) if filters else []
         yield from self._rows
 
     def capabilities(self) -> Capabilities:
@@ -185,6 +187,67 @@ class SessionTests(unittest.TestCase):
     def test_tables_returns_names(self):
         db = self._make_session()
         self.assertIn("items", db.tables())
+
+
+# ---------------------------------------------------------------------------
+# SELECT filter pushdown tests  (zero network, zero disk)
+# ---------------------------------------------------------------------------
+
+class FakePushdownConnector(BaseConnector):
+    """Connector that records what filters fetch() was called with."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.received_filters: list[list[dict]] = []
+
+    def schema(self) -> Schema:
+        cols = [Column(k, "text") for k in (self._rows[0] if self._rows else {})]
+        return Schema(tables={"items": cols})
+
+    def fetch(self, table, columns, filters, limit, offset, context=None):
+        self.received_filters.append(list(filters))
+        yield from self._rows
+
+    def capabilities(self) -> Capabilities:
+        return Capabilities(readable=True, filter_pushdown=True)
+
+
+class FilterPushdownTests(unittest.TestCase):
+
+    def test_where_filters_passed_to_fetch_for_single_table(self):
+        connector = FakePushdownConnector([{"id": "1", "name": "alpha"}, {"id": "2", "name": "beta"}])
+        db = sidol.connect()
+        db.register("items", connector)
+        db.sql("SELECT * FROM items WHERE name = 'alpha'")
+        self.assertEqual(len(connector.received_filters), 1)
+        self.assertIn({"col": "name", "op": "=", "val": "alpha"}, connector.received_filters[0])
+
+    def test_no_pushdown_for_connector_without_capability(self):
+        connector = FakeConnector([{"id": "1", "name": "alpha"}, {"id": "2", "name": "beta"}])
+        db = sidol.connect()
+        db.register("items", connector)
+        # FakeConnector has filter_pushdown=False (default Capabilities)
+        db.sql("SELECT * FROM items WHERE name = 'alpha'")
+        # fetch should have been called with empty filters
+        self.assertEqual(connector._last_fetch_filters, [])
+
+    def test_no_pushdown_for_join_queries(self):
+        src = FakePushdownConnector([{"src_id": "1", "src_val": "x"}])
+        dst = FakePushdownConnector([{"dst_id": "1", "dst_val": "y"}])
+        db = sidol.connect()
+        db.register("sources", src)
+        db.register("targets", dst)
+        db.sql("SELECT * FROM sources JOIN targets ON sources.src_id = targets.dst_id WHERE sources.src_val = 'x'")
+        # Multi-table query — no filters should be pushed down to either connector
+        self.assertEqual(src.received_filters[0], [])
+        self.assertEqual(dst.received_filters[0], [])
+
+    def test_select_without_where_passes_empty_filters(self):
+        connector = FakePushdownConnector([{"id": "1", "name": "alpha"}])
+        db = sidol.connect()
+        db.register("items", connector)
+        db.sql("SELECT * FROM items")
+        self.assertEqual(connector.received_filters[0], [])
 
 
 # ---------------------------------------------------------------------------

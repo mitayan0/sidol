@@ -8,7 +8,9 @@ from typing import Any
 
 import httpx
 
+from sidol.cache import TTLCache
 from sidol.connectors import airtable_utils as utils
+from sidol.connectors import http_utils
 from sidol.connectors.base import BaseConnector
 from sidol.context import ConnectorContext
 from sidol.errors import ConnectorError, WriteError
@@ -37,6 +39,7 @@ class AirtableConnector(BaseConnector):
         self._token = token
         self._timeout = timeout
         self._owns_client = client is None
+        self._cache: TTLCache = TTLCache(default_ttl=300)
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -48,10 +51,18 @@ class AirtableConnector(BaseConnector):
     def _url(self, table: str) -> str:
         return f"https://api.airtable.com/v0/{self.base_id}/{table}"
 
+    def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        return http_utils.request_with_retry(self.client, method, url, **kwargs)
+
     def schema(self) -> Schema:
         """Return schema by inferring from the first page of records.
         If no specific table is set, lists all tables via Metadata API first.
         """
+        cache_key = f"schema:{self.base_id}:{self.table or '*'}"
+        cached: Schema | None = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         # 1. Identify which tables to describe
         target_tables = [self.table] if self.table else []
 
@@ -59,10 +70,12 @@ class AirtableConnector(BaseConnector):
             # Fetch all table names from Metadata API
             try:
                 url = f"https://api.airtable.com/v0/meta/bases/{self.base_id}/tables"
-                resp = self.client.get(url)
+                resp = self._request("GET", url)
                 if resp.status_code == 200:
                     target_tables = [t["name"] for t in resp.json().get("tables", [])]
             except Exception:
+                # Metadata API is optional; skip gracefully if unavailable or
+                # the token lacks the schema:bases:read scope.
                 pass
 
         if not target_tables:
@@ -72,7 +85,7 @@ class AirtableConnector(BaseConnector):
         result_tables = {}
         for table_name in target_tables:
             try:
-                resp = self.client.get(self._url(table_name), params={"maxRecords": 1})
+                resp = self._request("GET", self._url(table_name), params={"maxRecords": 1})
                 if resp.status_code != 200:
                     continue
 
@@ -92,9 +105,13 @@ class AirtableConnector(BaseConnector):
                     cols.append(Column(name=name, type=dtype, primary_key=(name == "id")))
                 result_tables[table_name] = cols
             except Exception:
+                # A single table failing (network blip, bad permissions) should
+                # not abort schema discovery for the remaining tables.
                 continue
 
-        return Schema(tables=result_tables)
+        result = Schema(tables=result_tables)
+        self._cache.set(cache_key, result)
+        return result
 
     def fetch(
         self,
@@ -125,7 +142,7 @@ class AirtableConnector(BaseConnector):
             if limit:
                 params["maxRecords"] = limit
 
-            resp = self.client.get(self._url(table), params=params)
+            resp = self._request("GET", self._url(table), params=params)
             if resp.status_code >= 400:
                 raise ConnectorError(f"Airtable fetch failed: {utils.airtable_error_detail(resp)}")
 
@@ -162,7 +179,7 @@ class AirtableConnector(BaseConnector):
         for i in range(0, len(rows), 10):
             chunk = rows[i : i + 10]
             payload = {"records": [{"fields": row} for row in chunk]}
-            resp = self.client.post(self._url(table), json=payload)
+            resp = self._request("POST", self._url(table), json=payload)
             if resp.status_code >= 400:
                 raise WriteError(f"Airtable insert failed: {utils.airtable_error_detail(resp)}")
 
@@ -186,7 +203,7 @@ class AirtableConnector(BaseConnector):
         for i in range(0, len(ids), 10):
             chunk_ids = ids[i : i + 10]
             payload = {"records": [{"id": rid, "fields": values} for rid in chunk_ids]}
-            resp = self.client.patch(self._url(table), json=payload)
+            resp = self._request("PATCH", self._url(table), json=payload)
             if resp.status_code >= 400:
                 raise WriteError(f"Airtable update failed: {utils.airtable_error_detail(resp)}")
 
@@ -209,7 +226,7 @@ class AirtableConnector(BaseConnector):
             chunk_ids = ids[i : i + 10]
             # DELETE expects records[] query params
             params = [("records[]", rid) for rid in chunk_ids]
-            resp = self.client.delete(self._url(table), params=params)
+            resp = self._request("DELETE", self._url(table), params=params)
             if resp.status_code >= 400:
                 raise WriteError(f"Airtable delete failed: {utils.airtable_error_detail(resp)}")
             deleted_count += len(chunk_ids)

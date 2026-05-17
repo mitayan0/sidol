@@ -18,7 +18,11 @@ class BaseConnectorTestCase(unittest.TestCase):
         self._mock_responses: list[httpx.Response] = []
 
     def mock_response(
-        self, status_code: int = 200, json_data: Any = None, text: str = ""
+        self,
+        status_code: int = 200,
+        json_data: Any = None,
+        text: str = "",
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Queue a mock HTTP response."""
         content = None
@@ -27,7 +31,7 @@ class BaseConnectorTestCase(unittest.TestCase):
         elif text:
             content = text.encode("utf-8")
 
-        resp = httpx.Response(status_code, content=content)
+        resp = httpx.Response(status_code, content=content, headers=headers or {})
         self._mock_responses.append(resp)
 
     def get_mock_client(self) -> httpx.Client:
